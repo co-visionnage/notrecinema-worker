@@ -1,0 +1,57 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light only">
+<meta name="supported-color-schemes" content="light only">
+<title>{{.Subject}}</title>
+</head>
+<body style="margin:0;padding:0;background-color:#facc15;">
+<div style="display:none;font-size:1px;line-height:1px;max-height:0;max-width:0;opacity:0;overflow:hidden;">{{.Preheader}}</div>
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="background-color:#facc15;">
+<tr>
+<td align="center" style="padding:32px 12px;">
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="max-width:560px;">
+<tr>
+<td style="padding:0 0 16px 0;">
+<span style="display:inline-block;background-color:#000000;color:#facc15;font-family:'Arial Black',Arial,Helvetica,sans-serif;font-size:18px;line-height:1;font-weight:900;letter-spacing:1px;text-transform:uppercase;padding:10px 14px;">notrecinema</span>
+</td>
+</tr>
+<tr>
+<td style="background-color:#ffffff;border:4px solid #000000;border-right-width:12px;border-bottom-width:12px;padding:28px 24px;font-family:Arial,Helvetica,sans-serif;font-size:16px;line-height:1.55;color:#000000;">
+<div style="width:64px;height:10px;background-color:{{.AccentColor}};border:3px solid #000000;margin:0 0 20px 0;font-size:0;line-height:0;">&nbsp;</div>
+<h1 style="margin:0 0 16px 0;font-family:'Arial Black',Arial,Helvetica,sans-serif;font-size:26px;line-height:1.15;font-weight:900;text-transform:uppercase;color:#000000;">{{.Heading}}</h1>
+{{if .Greeting}}<p style="margin:0 0 14px 0;font-weight:bold;">{{.Greeting}}</p>
+{{end}}{{range .Paragraphs}}<p style="margin:0 0 14px 0;">{{.}}</p>
+{{end}}{{if .Highlight}}<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="margin:0 0 20px 0;">
+<tr>
+<td style="background-color:{{$.AccentColor}};border:4px solid #000000;border-right-width:8px;border-bottom-width:8px;padding:14px 16px;">
+{{if .Highlight.Label}}<div style="font-size:12px;line-height:1.3;font-weight:900;letter-spacing:1px;text-transform:uppercase;">{{.Highlight.Label}}</div>
+{{end}}<div style="font-family:'Arial Black',Arial,Helvetica,sans-serif;font-size:20px;line-height:1.2;font-weight:900;margin-top:4px;">{{.Highlight.Title}}</div>
+{{if .Highlight.Text}}<div style="margin-top:6px;">{{.Highlight.Text}}</div>
+{{end}}</td>
+</tr>
+</table>
+{{end}}{{if .Button}}<table role="presentation" cellpadding="0" cellspacing="0" border="0" style="margin:0 0 16px 0;">
+<tr>
+<td style="background-color:{{$.AccentColor}};border:4px solid #000000;border-right-width:8px;border-bottom-width:8px;">
+<a href="{{.Button.URL}}" style="display:block;padding:14px 24px;font-family:'Arial Black',Arial,Helvetica,sans-serif;font-size:16px;line-height:1.2;font-weight:900;letter-spacing:0.5px;text-transform:uppercase;text-decoration:none;color:#000000;">{{.Button.Label}}</a>
+</td>
+</tr>
+</table>
+<p style="margin:0 0 14px 0;font-size:13px;line-height:1.5;color:#333333;">Если кнопка не нажимается, скопируйте ссылку в браузер:<br><a href="{{.Button.URL}}" style="color:#000000;word-break:break-all;">{{.Button.URL}}</a></p>
+{{end}}{{if .Footnote}}<p style="margin:20px 0 0 0;padding-top:14px;border-top:3px solid #000000;font-size:13px;line-height:1.5;color:#333333;">{{.Footnote}}</p>
+{{end}}</td>
+</tr>
+<tr>
+<td style="padding:20px 4px 0 4px;font-family:Arial,Helvetica,sans-serif;font-size:12px;line-height:1.5;color:#000000;">
+<strong>notrecinema</strong> &middot; семейный трекер сериалов<br>{{.Reason}}
+</td>
+</tr>
+</table>
+</td>
+</tr>
+</table>
+</body>
+</html>

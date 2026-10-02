@@ -1,0 +1,18 @@
+{{.Heading}}
+{{if .Greeting}}
+{{.Greeting}}
+{{end}}{{range .Paragraphs}}
+{{.}}
+{{end}}{{if .Highlight}}
+{{if .Highlight.Label}}{{.Highlight.Label}}: {{end}}{{.Highlight.Title}}{{if .Highlight.Text}}
+{{.Highlight.Text}}{{end}}
+{{end}}{{if .Button}}
+{{.Button.Label}}:
+{{.Button.URL}}
+{{end}}{{if .Footnote}}
+--
+{{.Footnote}}
+{{end}}
+--
+notrecinema - семейный трекер сериалов
+{{.Reason}}

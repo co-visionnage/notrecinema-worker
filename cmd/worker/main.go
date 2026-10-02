@@ -20,6 +20,8 @@ import (
 	"notrecinema/worker/internal/eventbus"
 	"notrecinema/worker/internal/handlers"
 	"notrecinema/worker/internal/logging"
+	"notrecinema/worker/internal/mailer"
+	"notrecinema/worker/internal/mailing"
 	"notrecinema/worker/internal/notifications"
 	"notrecinema/worker/internal/postgres"
 	"notrecinema/worker/internal/telemetry"
@@ -86,17 +88,38 @@ func run(logger *slog.Logger) error {
 	sender := webpush.NewSender(pushConfig)
 	notifier := notifications.NewNotifier(db, sender, pushConfig, logger)
 
+	var mailSender mailer.Sender = mailer.Disabled{}
+	if cfg.ResendAPIKey != "" {
+		resend := mailer.NewResend(cfg.ResendAPIKey, cfg.MailFrom, cfg.MailReplyTo, nil)
+		if cfg.ResendAPIURL != "" {
+			resend = resend.WithBaseURL(cfg.ResendAPIURL)
+		}
+		mailSender = resend
+	} else {
+		logger.Warn("mailer: RESEND_API_KEY не задан, письма отключены")
+	}
+	mail := mailing.NewService(mailSender, mailing.NewPgStore(db), cfg.AppURL, logger)
+
 	c := consumer.New(js, db, logger, metrics, cfg.MaxDeliver).WithDeadLetterPublisher(deadLetterPublisher)
 	c.Handle("family.member.joined", handlers.FamilyMemberJoined(logger, notifier))
-	c.Handle("movie.added", handlers.MovieAdded(logger, notifier))
+	c.Handle("movie.added", handlers.MovieAdded(logger, notifier, mail))
 	c.Handle("movie.watched", handlers.MovieWatched(logger, notifier))
 	c.Handle("movie.rated", handlers.MovieRated(logger, notifier))
 	c.Handle("poll.created", handlers.PollCreated(logger, notifier))
 	c.Handle("poll.closed", handlers.PollClosed(logger, notifier))
 	c.Handle("watch_event.created", handlers.WatchEventCreated(logger, notifier))
-	c.Handle("progress.stale", handlers.ProgressStale(logger, notifier))
-	c.Handle("season.updated", handlers.SeasonUpdated(logger, notifier))
+	c.Handle("progress.stale", handlers.ProgressStale(logger, notifier, mail))
+	c.Handle("season.updated", handlers.SeasonUpdated(logger, notifier, mail))
 	c.Handle("series.bulk_added", handlers.SeriesBulkAdded(logger, notifier))
+
+	// Транзакционные письма: подтверждение email, сброс пароля,
+	// уведомления о безопасности и удаление аккаунта.
+	c.Handle("email.verification_requested", handlers.EmailVerificationRequested(logger, mail))
+	c.Handle("email.password_reset_requested", handlers.PasswordResetRequested(logger, mail))
+	c.Handle("security.password_changed", handlers.PasswordChanged(logger, mail))
+	c.Handle("security.two_factor_enabled", handlers.TwoFactorEnabled(logger, mail))
+	c.Handle("security.two_factor_disabled", handlers.TwoFactorDisabled(logger, mail))
+	c.Handle("account.deleted", handlers.AccountDeleted(logger, mail))
 
 	// Минимальный HTTP-сервер для docker/k8s healthcheck и Prometheus -- у
 	// воркера нет публичного API, но метрики и пробы всё равно нужно

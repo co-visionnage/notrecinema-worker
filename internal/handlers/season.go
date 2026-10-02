@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 
+	"notrecinema/worker/internal/mailing"
 	"notrecinema/worker/internal/notifications"
 	"notrecinema/worker/internal/webpush"
 )
@@ -24,7 +25,7 @@ type seasonUpdatedPayload struct {
 // разовой проверке по запросу пользователя (исключаем того, кто её
 // запустил, как и в notrecinema-app). Текст уведомления -- дословный
 // перенос: "Вышел новый сезон!" / "У «...» теперь N сезон(ов)".
-func SeasonUpdated(logger *slog.Logger, notifier *notifications.Notifier) func(ctx context.Context, payload json.RawMessage) error {
+func SeasonUpdated(logger *slog.Logger, notifier *notifications.Notifier, mail *mailing.Service) func(ctx context.Context, payload json.RawMessage) error {
 	return func(ctx context.Context, payload json.RawMessage) error {
 		var p seasonUpdatedPayload
 		if err := json.Unmarshal(payload, &p); err != nil {
@@ -33,10 +34,15 @@ func SeasonUpdated(logger *slog.Logger, notifier *notifications.Notifier) func(c
 
 		logger.Info("обработано событие season.updated", "series_id", p.SeriesID, "family_id", p.FamilyID, "total_seasons", p.TotalSeasons)
 
-		return notifier.NotifyFamilyExcept(ctx, p.FamilyID, p.ExcludeUserID, webpush.Payload{
+		if err := notifier.NotifyFamilyExcept(ctx, p.FamilyID, p.ExcludeUserID, webpush.Payload{
 			Title: "Вышел новый сезон!",
 			Body:  fmt.Sprintf("У «%s» теперь %d сезон(ов)", p.Title, p.TotalSeasons),
 			URL:   "/",
-		})
+		}); err != nil {
+			return err
+		}
+
+		mail.NotifyFamilySeasonUpdated(ctx, p.FamilyID, p.ExcludeUserID, p.Title, p.TotalSeasons)
+		return nil
 	}
 }

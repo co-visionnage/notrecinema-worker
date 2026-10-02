@@ -34,6 +34,22 @@ type Config struct {
 	VAPIDPublicKey  string `env:"VAPID_PUBLIC_KEY"`
 	VAPIDPrivateKey string `env:"VAPID_PRIVATE_KEY"`
 	VAPIDSubject    string `env:"VAPID_SUBJECT"`
+
+	// Почта через Resend (https://resend.com). Опциональна: без
+	// RESEND_API_KEY письма не отправляются (в лог пишется предупреждение
+	// при старте), остальная работа воркера не страдает -- так же, как без
+	// VAPID-ключей не работает только push.
+	ResendAPIKey string `env:"RESEND_API_KEY"`
+	// ResendAPIURL подменяет адрес API Resend (стенд/локальная проверка
+	// с заглушкой). В обычной работе не задаётся.
+	ResendAPIURL string `env:"RESEND_API_URL"`
+	// MailFrom -- адрес отправителя; домен должен быть подтверждён в Resend.
+	MailFrom string `env:"MAIL_FROM" env-default:"notrecinema <noreply@notrecinema.ru>"`
+	// MailReplyTo -- необязательный адрес для ответов на письма.
+	MailReplyTo string `env:"MAIL_REPLY_TO"`
+	// AppURL -- адрес фронтенда без завершающего слэша: на него ведут
+	// ссылки в письмах (/verify-email, /reset-password и т.д.).
+	AppURL string `env:"APP_URL" env-default:"http://localhost:3000"`
 }
 
 func Load() (Config, error) {

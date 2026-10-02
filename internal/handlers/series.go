@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 
+	"notrecinema/worker/internal/mailing"
 	"notrecinema/worker/internal/notifications"
 	"notrecinema/worker/internal/webpush"
 )
@@ -17,7 +18,9 @@ type seriesAddedPayload struct {
 	Title    string `json:"title"`
 }
 
-func MovieAdded(logger *slog.Logger, notifier *notifications.Notifier) func(ctx context.Context, payload json.RawMessage) error {
+// MovieAdded уведомляет семью о новом сериале: push и, если настроена
+// почта, письмо (прямой перенос notifyFamilyByEmail из notrecinema-app).
+func MovieAdded(logger *slog.Logger, notifier *notifications.Notifier, mail *mailing.Service) func(ctx context.Context, payload json.RawMessage) error {
 	return func(ctx context.Context, payload json.RawMessage) error {
 		var p seriesAddedPayload
 		if err := json.Unmarshal(payload, &p); err != nil {
@@ -26,10 +29,15 @@ func MovieAdded(logger *slog.Logger, notifier *notifications.Notifier) func(ctx 
 
 		logger.Info("обработано событие movie.added", "series_id", p.SeriesID, "family_id", p.FamilyID)
 
-		return notifier.NotifyFamily(ctx, p.FamilyID, p.UserID, webpush.Payload{
+		if err := notifier.NotifyFamily(ctx, p.FamilyID, p.UserID, webpush.Payload{
 			Title: "Новый сериал в списке",
 			Body:  fmt.Sprintf("Добавлено: «%s»", p.Title),
-		})
+		}); err != nil {
+			return err
+		}
+
+		mail.NotifyFamilySeriesAdded(ctx, p.FamilyID, &p.UserID, p.SeriesID, p.Title)
+		return nil
 	}
 }
 
