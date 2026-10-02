@@ -187,9 +187,9 @@ jobs:
           echo "$SSH_KNOWN_HOSTS" > ~/.ssh/known_hosts && chmod 644 ~/.ssh/known_hosts
           ssh "$SSH_USER@$SSH_HOST" \
             "cd $DEPLOY_PATH && \
-             git fetch origin && \
-             git checkout $GITHUB_SHA && \
-             export IMAGE_TAG=$IMAGE_TAG && \
-             docker compose pull worker && \
-             docker compose up -d --remove-orphans worker && \
+             git fetch origin main && \
+             git checkout --detach origin/main && \
+             export WORKER_IMAGE_TAG=$IMAGE_TAG && \
+             docker compose -f docker-compose.prod.yml pull worker && \
+             docker compose -f docker-compose.prod.yml up -d --remove-orphans worker && \
              docker image prune -f"
