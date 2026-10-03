@@ -34,7 +34,7 @@ func SeasonUpdated(logger *slog.Logger, notifier *notifications.Notifier, mail *
 
 		logger.Info("обработано событие season.updated", "series_id", p.SeriesID, "family_id", p.FamilyID, "total_seasons", p.TotalSeasons)
 
-		if err := notifier.NotifyFamilyExcept(ctx, p.FamilyID, p.ExcludeUserID, webpush.Payload{
+		if err := notifier.NotifyFamilyExcept(ctx, p.FamilyID, p.ExcludeUserID, "season_update", webpush.Payload{
 			Title: "Вышел новый сезон!",
 			Body:  fmt.Sprintf("У «%s» теперь %d сезон(ов)", p.Title, p.TotalSeasons),
 			URL:   "/",

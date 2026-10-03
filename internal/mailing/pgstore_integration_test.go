@@ -183,7 +183,7 @@ func TestFamilyRecipientsOnlyVerifiedAndHonourExclude(t *testing.T) {
 	squatterID, _ := registerUser(t, conn, "Неподтверждённый")
 	familyID := createFamily(t, conn, ownerID, memberID, squatterID)
 
-	got, err := store.FamilyRecipients(ctx, familyID, nil)
+	got, err := store.FamilyRecipients(ctx, familyID, nil, "series_added")
 	if err != nil {
 		t.Fatalf("FamilyRecipients() error: %v", err)
 	}
@@ -191,7 +191,7 @@ func TestFamilyRecipientsOnlyVerifiedAndHonourExclude(t *testing.T) {
 		t.Errorf("recipients = %v, want %v (the unverified member must be left out)", emailsOf(got), want)
 	}
 
-	got, err = store.FamilyRecipients(ctx, familyID, &ownerID)
+	got, err = store.FamilyRecipients(ctx, familyID, &ownerID, "series_added")
 	if err != nil {
 		t.Fatalf("FamilyRecipients() error: %v", err)
 	}
@@ -222,4 +222,166 @@ func sameEmails(got []mailing.Recipient, want []string) bool {
 		}
 	}
 	return true
+}
+
+func setEmailPreference(t *testing.T, conn *pgx.Conn, userID, category string, email bool) {
+	t.Helper()
+	ctx := context.Background()
+	tx, err := conn.Begin(ctx)
+	if err != nil {
+		t.Fatalf("begin: %v", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	if _, err := tx.Exec(ctx, "SELECT set_config('app.current_user_id', $1, true)", userID); err != nil {
+		t.Fatalf("set context: %v", err)
+	}
+	if _, err := tx.Exec(ctx, `
+		INSERT INTO public.notification_preferences (user_id, category, push, email) VALUES ($1, $2, true, $3)
+		ON CONFLICT (user_id, category) DO UPDATE SET email = EXCLUDED.email
+	`, userID, category, email); err != nil {
+		t.Fatalf("set preference: %v", err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		t.Fatalf("commit: %v", err)
+	}
+}
+
+func TestFamilyRecipientsHonourTheCategorySwitch(t *testing.T) {
+	pool, conn := connect(t)
+	store := mailing.NewPgStore(pool)
+	ctx := context.Background()
+
+	ownerID, ownerEmail := verifiedUser(t, conn, "Владелец")
+	optedOutID, optedOutEmail := verifiedUser(t, conn, "Отказался")
+	familyID := createFamily(t, conn, ownerID, optedOutID)
+
+	setEmailPreference(t, conn, optedOutID, "series_added", false)
+
+	got, err := store.FamilyRecipients(ctx, familyID, nil, "series_added")
+	if err != nil {
+		t.Fatalf("FamilyRecipients() error: %v", err)
+	}
+	if want := []string{ownerEmail}; !sameEmails(got, want) {
+		t.Errorf("series_added recipients = %v, want %v (the opted-out member must be left out)", emailsOf(got), want)
+	}
+	for _, r := range got {
+		if r.UserID == "" {
+			t.Error("a recipient has no user id: the unsubscribe link cannot be built")
+		}
+	}
+
+	// Отказ действует только на свою категорию.
+	got, err = store.FamilyRecipients(ctx, familyID, nil, "season_update")
+	if err != nil {
+		t.Fatalf("FamilyRecipients() error: %v", err)
+	}
+	if want := []string{ownerEmail, optedOutEmail}; !sameEmails(got, want) {
+		t.Errorf("season_update recipients = %v, want %v", emailsOf(got), want)
+	}
+
+	// Категория без писем по умолчанию: почту получать некому.
+	got, err = store.FamilyRecipients(ctx, familyID, nil, "poll")
+	if err != nil {
+		t.Fatalf("FamilyRecipients() error: %v", err)
+	}
+	if len(got) != 0 {
+		t.Errorf("poll recipients = %v, want none (email is off by default for this category)", emailsOf(got))
+	}
+}
+
+func TestUserEmailEnabledFollowsPreferencesAndDefaults(t *testing.T) {
+	pool, conn := connect(t)
+	store := mailing.NewPgStore(pool)
+	ctx := context.Background()
+	userID, _ := verifiedUser(t, conn, "Настройки")
+
+	on, err := store.UserEmailEnabled(ctx, userID, "progress_reminder")
+	if err != nil || !on {
+		t.Fatalf("default for progress_reminder = (%v, %v), want on", on, err)
+	}
+
+	setEmailPreference(t, conn, userID, "progress_reminder", false)
+	on, err = store.UserEmailEnabled(ctx, userID, "progress_reminder")
+	if err != nil || on {
+		t.Errorf("after switching off = (%v, %v), want off", on, err)
+	}
+}
+
+func createInvitation(t *testing.T, conn *pgx.Conn, familyID, inviterID, email string) string {
+	t.Helper()
+	ctx := context.Background()
+	tx, err := conn.Begin(ctx)
+	if err != nil {
+		t.Fatalf("begin: %v", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	if _, err := tx.Exec(ctx, "SELECT set_config('app.current_user_id', $1, true)", inviterID); err != nil {
+		t.Fatalf("set context: %v", err)
+	}
+	var id string
+	if err := tx.QueryRow(ctx, `
+		INSERT INTO public.family_invitations (family_id, email, invited_by) VALUES ($1, $2, $3) RETURNING id
+	`, familyID, email, inviterID).Scan(&id); err != nil {
+		t.Fatalf("create invitation: %v", err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		t.Fatalf("commit: %v", err)
+	}
+	return id
+}
+
+func TestInvitationStoreRoundTrip(t *testing.T) {
+	pool, conn := connect(t)
+	store := mailing.NewPgStore(pool)
+	ctx := context.Background()
+
+	ownerID, _ := verifiedUser(t, conn, "Борис")
+	familyID := createFamily(t, conn, ownerID)
+	guestEmail := fmt.Sprintf("guest-%s@example.com", randomHex(t, 6))
+	invitationID := createInvitation(t, conn, familyID, ownerID, guestEmail)
+
+	info, err := store.InvitationInfo(ctx, invitationID)
+	if err != nil {
+		t.Fatalf("InvitationInfo() error: %v", err)
+	}
+	if info.Email != guestEmail || info.FamilyName != "Mailing Test" || info.InviterName != "Борис" {
+		t.Errorf("info = %+v", info)
+	}
+
+	// Токен, посчитанный воркером, принимает функция, которую вызывает API.
+	raw := randomHex(t, 32)
+	stored, err := store.CreateInvitationToken(ctx, invitationID, mailing.HashToken(raw), time.Now().Add(time.Hour))
+	if err != nil || !stored {
+		t.Fatalf("CreateInvitationToken() = (%v, %v)", stored, err)
+	}
+	guestID, _ := verifiedUser(t, conn, "Гость")
+	var accepted int
+	tx, err := conn.Begin(ctx)
+	if err != nil {
+		t.Fatalf("begin: %v", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	if _, err := tx.Exec(ctx, "SELECT set_config('app.current_user_id', $1, true)", guestID); err != nil {
+		t.Fatalf("set context: %v", err)
+	}
+	if err := tx.QueryRow(ctx, `SELECT count(*) FROM public.accept_family_invitation($1)`, mailing.HashToken(raw)).Scan(&accepted); err != nil {
+		t.Fatalf("accept_family_invitation: %v", err)
+	}
+	if accepted != 1 {
+		t.Fatal("the API-side function rejected a token hashed by the worker")
+	}
+	if err := tx.Commit(ctx); err != nil {
+		t.Fatalf("commit: %v", err)
+	}
+
+	// Принятое приглашение больше не нужно ни показывать, ни продлевать.
+	if _, err := store.InvitationInfo(ctx, invitationID); !errors.Is(err, mailing.ErrInvitationNotFound) {
+		t.Errorf("InvitationInfo(accepted) error = %v, want ErrInvitationNotFound", err)
+	}
+	stored, err = store.CreateInvitationToken(ctx, invitationID, mailing.HashToken("late"), time.Now().Add(time.Hour))
+	if err != nil || stored {
+		t.Errorf("CreateInvitationToken(accepted) = (%v, %v), want (false, nil)", stored, err)
+	}
 }

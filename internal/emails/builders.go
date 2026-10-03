@@ -14,6 +14,10 @@ const (
 	verifyEmailPath    = "/verify-email"
 	resetPasswordPath  = "/reset-password"
 	forgotPasswordPath = "/forgot-password"
+	settingsPath       = "/settings"
+	invitePath         = "/invite"
+	unsubscribePath    = "/unsubscribe"
+	unsubscribeAPIPath = "/api/v1/unsubscribe"
 )
 
 // Links строит ссылки для писем от адреса фронтенда.
@@ -36,6 +40,25 @@ func (l Links) ResetPassword(token string) string {
 }
 
 func (l Links) ForgotPassword() string { return l.base + forgotPasswordPath }
+
+// Settings -- страница настроек аккаунта (безопасность, уведомления).
+func (l Links) Settings() string { return l.base + settingsPath }
+
+func (l Links) Invite(token string) string {
+	return l.base + invitePath + "?token=" + url.QueryEscape(token)
+}
+
+// Unsubscribe -- страница на фронтенде, которую открывает человек по ссылке
+// в подвале письма.
+func (l Links) Unsubscribe(token string) string {
+	return l.base + unsubscribePath + "?token=" + url.QueryEscape(token)
+}
+
+// UnsubscribeAPI -- адрес, на который почтовый клиент шлёт POST для
+// отписки в один клик (заголовок List-Unsubscribe, RFC 8058).
+func (l Links) UnsubscribeAPI(token string) string {
+	return l.base + unsubscribeAPIPath + "?token=" + url.QueryEscape(token)
+}
 
 func (l Links) Series(seriesID string) string {
 	return l.base + "/series/" + url.PathEscape(seriesID)
@@ -216,5 +239,82 @@ func ProgressStale(name, title string, season, episode int, seriesURL string) Co
 		Button: &Button{Label: "Продолжить смотреть", URL: seriesURL},
 		Reason: "Вы получили это письмо, потому что отслеживаете этот сериал в notrecinema.",
 		Accent: AccentPink,
+	}
+}
+
+// BackupCodeUsed -- уведомление: вход выполнен резервным кодом. Если кодов
+// почти не осталось, письмо прямо просит выпустить новые.
+func BackupCodeUsed(name string, remaining int, settingsURL string) Content {
+	paragraphs := []string{
+		"Только что в ваш аккаунт в notrecinema вошли с резервным кодом двухфакторной аутентификации. Этот код больше не действует.",
+		fmt.Sprintf("Осталось неиспользованных резервных кодов: %d.", remaining),
+	}
+	if remaining <= 2 {
+		paragraphs = append(paragraphs, "Кодов осталось совсем мало. Выпустите новый набор в настройках безопасности, пока не потеряли доступ к аккаунту.")
+	}
+	paragraphs = append(paragraphs, "Если это были не вы, срочно смените пароль и перевыпустите резервные коды.")
+
+	return Content{
+		Subject:    "В аккаунт вошли с резервным кодом",
+		Preheader:  fmt.Sprintf("Осталось резервных кодов: %d", remaining),
+		Heading:    "Использован резервный код",
+		Greeting:   greeting(name),
+		Paragraphs: paragraphs,
+		Button:     &Button{Label: "Настройки безопасности", URL: settingsURL},
+		Reason:     "Это уведомление о безопасности вашего аккаунта в notrecinema.",
+		Accent:     AccentPink,
+	}
+}
+
+// BackupCodesRegenerated -- уведомление: резервные коды выпущены заново.
+func BackupCodesRegenerated(name, settingsURL string) Content {
+	return Content{
+		Subject:   "Резервные коды 2FA выпущены заново",
+		Preheader: "Старые резервные коды больше не действуют",
+		Heading:   "Новые резервные коды",
+		Greeting:  greeting(name),
+		Paragraphs: []string{
+			"Для вашего аккаунта в notrecinema выпущен новый набор резервных кодов двухфакторной аутентификации. Все прежние коды перестали действовать.",
+			"Если это были не вы, срочно смените пароль.",
+		},
+		Button: &Button{Label: "Настройки безопасности", URL: settingsURL},
+		Reason: "Это уведомление о безопасности вашего аккаунта в notrecinema.",
+		Accent: AccentPink,
+	}
+}
+
+// Welcome -- приветствие после подтверждения адреса.
+func Welcome(name, homeURL string) Content {
+	return Content{
+		Subject:   "Добро пожаловать в notrecinema",
+		Preheader: "Создайте семью и начните отслеживать сериалы вместе",
+		Heading:   "Добро пожаловать!",
+		Greeting:  greeting(name),
+		Paragraphs: []string{
+			"Рады, что вы с нами. notrecinema — это общий список сериалов для вашей семьи: добавляйте, что хотите посмотреть, отмечайте серии и решайте, что смотреть сегодня, вместе.",
+			"Начните с малого: создайте семью и пригласите близких — по коду или по email.",
+		},
+		Button: &Button{Label: "Открыть notrecinema", URL: homeURL},
+		Reason: "Вы получили это письмо, потому что подтвердили email в notrecinema.",
+		Accent: AccentLime,
+	}
+}
+
+// FamilyInvitation -- приглашение в семью (ссылка действует 7 дней).
+func FamilyInvitation(inviterName, familyName, acceptURL string) Content {
+	return Content{
+		Subject:   inviterName + " приглашает вас в семью «" + familyName + "»",
+		Preheader: "Присоединяйтесь к общему списку сериалов",
+		Heading:   "Вас приглашают в семью",
+		Greeting:  "Здравствуйте!",
+		Paragraphs: []string{
+			inviterName + " приглашает вас присоединиться к семье в notrecinema — общему списку сериалов, где вы вместе отмечаете, что посмотрели, и выбираете, что смотреть дальше.",
+			"Чтобы принять приглашение, войдите в аккаунт или зарегистрируйтесь, а затем нажмите кнопку. Ссылка действует 7 дней.",
+		},
+		Highlight: &Highlight{Label: "Семья", Title: familyName, Text: "Приглашает: " + inviterName},
+		Button:    &Button{Label: "Принять приглашение", URL: acceptURL},
+		Footnote:  "Если вы не ждали этого письма, просто проигнорируйте его: без вашего согласия никто в семью не добавляется.",
+		Reason:    "Вы получили это письмо, потому что вас пригласили в notrecinema.",
+		Accent:    AccentYellow,
 	}
 }

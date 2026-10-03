@@ -33,7 +33,7 @@ func ProgressStale(logger *slog.Logger, notifier *notifications.Notifier, mail *
 
 		logger.Info("обработано событие progress.stale", "series_id", p.SeriesID, "user_id", p.UserID)
 
-		if err := notifier.NotifyUser(ctx, p.UserID, webpush.Payload{
+		if err := notifier.NotifyUser(ctx, p.UserID, "progress_reminder", webpush.Payload{
 			Title: "Давно не продолжали!",
 			Body: fmt.Sprintf(
 				"Вы остановились на сезоне %d, серии %d — «%s» ждёт продолжения",

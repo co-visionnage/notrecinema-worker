@@ -12,6 +12,8 @@ import (
 
 	"github.com/nats-io/nats.go"
 	"github.com/nats-io/nats.go/jetstream"
+
+	"notrecinema/worker/internal/telemetry"
 )
 
 const StreamName = "NOTRECINEMA"
@@ -34,10 +36,18 @@ func Connect(url string) (*nats.Conn, jetstream.JetStream, error) {
 		nats.RetryOnFailedConnect(true),
 		nats.MaxReconnects(-1),
 		nats.ReconnectWait(2*time.Second),
+		nats.ConnectHandler(func(*nats.Conn) { telemetry.SetNATSConnected(true) }),
+		nats.DisconnectErrHandler(func(*nats.Conn, error) { telemetry.SetNATSConnected(false) }),
+		nats.ReconnectHandler(func(*nats.Conn) {
+			telemetry.SetNATSConnected(true)
+			telemetry.RecordNATSReconnect()
+		}),
+		nats.ClosedHandler(func(*nats.Conn) { telemetry.SetNATSConnected(false) }),
 	)
 	if err != nil {
 		return nil, nil, err
 	}
+	telemetry.SetNATSConnected(conn.IsConnected())
 
 	js, err := jetstream.New(conn)
 	if err != nil {

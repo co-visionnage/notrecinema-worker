@@ -38,7 +38,7 @@ func FamilyMemberJoined(logger *slog.Logger, notifier *notifications.Notifier) f
 			return nil
 		}
 
-		return notifier.NotifyFamily(ctx, p.FamilyID, p.UserID, webpush.Payload{
+		return notifier.NotifyFamily(ctx, p.FamilyID, p.UserID, "member_joined", webpush.Payload{
 			Title: "Новый участник семьи",
 			Body:  fmt.Sprintf("%s присоединился(-ась) к вашей семье", p.DisplayName),
 		})

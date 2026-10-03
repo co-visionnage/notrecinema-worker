@@ -112,6 +112,10 @@ SMTP не нужны). Без `RESEND_API_KEY` письма отключены: 
 | `security.password_changed` | Пароль изменён | повтор при ошибке |
 | `security.two_factor_enabled` / `_disabled` | Уведомление о 2FA | повтор при ошибке |
 | `account.deleted` | Аккаунт удалён | повтор при ошибке |
+| `security.backup_code_used` | В аккаунт вошли с резервным кодом | повтор при ошибке |
+| `security.backup_codes_regenerated` | Резервные коды выпущены заново | повтор при ошибке |
+| `email.welcome` | Добро пожаловать (после подтверждения email) | best-effort |
+| `family.invitation_requested` | Приглашение в семью (ссылка `/invite`) | повтор при ошибке |
 | `movie.added` | Новый сериал в семье | best-effort (push уже ушёл) |
 | `season.updated` | Вышел новый сезон | best-effort |
 | `progress.stale` | Напоминание о заброшенном сериале | best-effort |
@@ -133,6 +137,17 @@ SMTP не нужны). Без `RESEND_API_KEY` письма отключены: 
   Посмотреть все письма глазами:
   `EMAIL_PREVIEW_DIR=/tmp/previews go test ./internal/emails -run Previews`
   и открыть `index.html`.
+
+- **Настройки и отписка.** Категории событий и «письма / push» хранятся в
+  `notification_preferences` (миграция 0037); push и письма по категории
+  проверяют их до отправки. В письмах-уведомлениях есть ссылка «отписаться»
+  (`/unsubscribe?token=...`) и заголовки `List-Unsubscribe` /
+  `List-Unsubscribe-Post` (RFC 8058). Токен -- HMAC без состояния на
+  `UNSUBSCRIBE_SECRET` (**тот же, что у API**, проверяющего ссылку); письма о
+  безопасности и транзакционные отписки не содержат.
+- **Приглашение** (`family.invitation_requested`): событие несёт только id
+  приглашения; токен выпускается при отправке, повторное нажатие
+  «Ещё раз» гасит предыдущую ссылку.
 
 Переменные: `RESEND_API_KEY`, `MAIL_FROM` (по умолчанию
 `notrecinema <noreply@notrecinema.ru>`, домен должен быть подтверждён в
@@ -175,8 +190,8 @@ httptest, что запрос дошёл с корректными `Authorizatio
 
 `GET :8081/healthz` — liveness (всегда 200, если процесс жив).
 `GET :8081/readyz` — readiness (падает, если соединение с NATS разорвано).
-`GET :8081/metrics` — `worker_jobs_total{event_type,outcome}`,
-`worker_job_duration_seconds{event_type}`. Трейсинг — OpenTelemetry, span
+`GET :8081/metrics` — метрики событий, писем, push и NATS; полный список и
+алерты -- в `../notrecinema-api/docs/METRICS.md`. Трейсинг — OpenTelemetry, span
 `worker.process` продолжает trace, начатый в `notrecinema-api` на
 HTTP-запросе (контекст передаётся через заголовки NATS-сообщения).
 

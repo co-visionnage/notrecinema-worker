@@ -39,6 +39,9 @@ type Envelope struct {
 	EventID   string          `json:"eventId"`
 	EventType string          `json:"eventType"`
 	Payload   json.RawMessage `json:"payload"`
+	// CreatedAt -- когда событие записано в outbox: по нему считается
+	// сквозная задержка (worker_event_age_seconds).
+	CreatedAt time.Time `json:"createdAt"`
 }
 
 // Handler обрабатывает один тип события. Возврат ошибки -- сигнал
@@ -62,6 +65,9 @@ type Consumer struct {
 	maxDeliver int
 	handlers   map[string]Handler
 	deadLetter DeadLetterPublisher
+	// deadLetterStream нужен только для метрики «сколько сообщений лежит в
+	// dead-letter стриме»; nil отключает её.
+	deadLetterStream jetstream.Stream
 }
 
 func New(js jetstream.JetStream, db *postgres.Pool, logger *slog.Logger, metrics *telemetry.Metrics, maxDeliver int) *Consumer {
@@ -82,6 +88,55 @@ func New(js jetstream.JetStream, db *postgres.Pool, logger *slog.Logger, metrics
 func (c *Consumer) WithDeadLetterPublisher(p DeadLetterPublisher) *Consumer {
 	c.deadLetter = p
 	return c
+}
+
+// WithDeadLetterStream сообщает консьюмеру стрим dead-letter, размер
+// которого он отдаёт в метрики (worker_dead_letter_messages).
+func (c *Consumer) WithDeadLetterStream(stream jetstream.Stream) *Consumer {
+	c.deadLetterStream = stream
+	return c
+}
+
+// statsInterval -- как часто читается состояние консьюмера и dead-letter
+// стрима для метрик.
+const statsInterval = 15 * time.Second
+
+// pollStats обновляет gauge'и очереди консьюмера и dead-letter стрима, пока
+// не отменят ctx.
+func (c *Consumer) pollStats(ctx context.Context, cons jetstream.Consumer) {
+	if c.metrics == nil {
+		return
+	}
+
+	update := func() {
+		if info, err := cons.Info(ctx); err == nil {
+			c.metrics.ConsumerPending.Set(float64(info.NumPending))
+			c.metrics.ConsumerAckPending.Set(float64(info.NumAckPending))
+			c.metrics.ConsumerRedelivered.Set(float64(info.NumRedelivered))
+		} else if ctx.Err() == nil {
+			c.logger.Warn("consumer: не удалось прочитать состояние консьюмера для метрик", "error", err)
+		}
+
+		if c.deadLetterStream != nil {
+			if info, err := c.deadLetterStream.Info(ctx); err == nil {
+				c.metrics.DeadLetterMessages.Set(float64(info.State.Msgs))
+			} else if ctx.Err() == nil {
+				c.logger.Warn("consumer: не удалось прочитать dead-letter стрим для метрик", "error", err)
+			}
+		}
+	}
+
+	update()
+	ticker := time.NewTicker(statsInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			update()
+		}
+	}
 }
 
 // Handle регистрирует обработчик для eventType (например
@@ -126,6 +181,8 @@ func (c *Consumer) Run(ctx context.Context, streamName, durableName string) erro
 		return fmt.Errorf("consumer: запустить consume: %w", err)
 	}
 	defer consumeCtx.Stop()
+
+	go c.pollStats(ctx, cons)
 
 	<-ctx.Done()
 	return nil
@@ -181,6 +238,18 @@ func (c *Consumer) handleMessage(ctx context.Context, msg jetstream.Msg) {
 
 	start := time.Now()
 	log := c.logger.With("event_id", envelope.EventID, "event_type", envelope.EventType)
+
+	if c.metrics != nil {
+		c.metrics.EventsInFlight.Inc()
+		defer c.metrics.EventsInFlight.Dec()
+
+		if !envelope.CreatedAt.IsZero() {
+			c.metrics.EventAge.WithLabelValues(envelope.EventType).Observe(time.Since(envelope.CreatedAt).Seconds())
+		}
+		if meta, err := msg.Metadata(); err == nil && meta.NumDelivered > 1 {
+			c.metrics.Redeliveries.WithLabelValues(envelope.EventType).Inc()
+		}
+	}
 
 	recordOutcome := func(outcome string) {
 		if c.metrics == nil {
@@ -259,8 +328,16 @@ func (c *Consumer) publishDeadLetter(ctx context.Context, log *slog.Logger, enve
 	if c.deadLetter == nil {
 		return
 	}
-	if err := c.deadLetter.Publish(ctx, envelope.EventType, msg.Data()); err != nil {
+	err := c.deadLetter.Publish(ctx, envelope.EventType, msg.Data())
+	if err != nil {
 		log.Error("consumer: не удалось опубликовать в dead-letter", "error", err)
+	}
+	if c.metrics != nil {
+		result := "ok"
+		if err != nil {
+			result = "error"
+		}
+		c.metrics.DeadLetterPublished.WithLabelValues(envelope.EventType, result).Inc()
 	}
 }
 
