@@ -43,6 +43,7 @@ const (
 	categorySeriesAdded      = "series_added"
 	categorySeasonUpdate     = "season_update"
 	categoryProgressReminder = "progress_reminder"
+	categoryWeeklyDigest     = "weekly_digest"
 )
 
 // ErrUserNotFound -- пользователя уже нет (например, удалил аккаунт, пока
@@ -88,6 +89,9 @@ type Store interface {
 	// CreateInvitationToken сохраняет хэш токена приглашения; false --
 	// приглашение уже принято или отозвано.
 	CreateInvitationToken(ctx context.Context, invitationID, tokenHash string, expiresAt time.Time) (bool, error)
+	// WeeklyDigest собирает еженедельную сводку человека по всем его семьям:
+	// что произошло в [since, until) и что запланировано на неделю после.
+	WeeklyDigest(ctx context.Context, userID string, since, until time.Time) ([]emails.DigestFamily, error)
 }
 
 type Service struct {
@@ -399,6 +403,44 @@ func (s *Service) NotifyUserProgressStale(ctx context.Context, userID, seriesID,
 	if err := s.deliverNotification(ctx, userID, categoryProgressReminder, info.Email, emails.ProgressStale(info.DisplayName, title, season, episode, s.links.Series(seriesID))); err != nil {
 		s.logger.Error("mailing: не удалось отправить напоминание", "event", "progress.stale", "user_id", userID, "error", err)
 	}
+}
+
+// SendWeeklyDigest отправляет еженедельную сводку. Письма нет, если адрес не
+// подтверждён, человек отказался от сводки или за неделю нечего рассказать.
+// Ошибка сборки или отправки возвращается: событие будет доставлено повторно.
+func (s *Service) SendWeeklyDigest(ctx context.Context, userID string, since, until time.Time) error {
+	if !s.Enabled() {
+		return s.skipDisabled("email.weekly_digest")
+	}
+	info, ok, err := s.lookup(ctx, categoryWeeklyDigest, userID, true)
+	if err != nil || !ok {
+		return err
+	}
+	enabled, err := s.store.UserEmailEnabled(ctx, userID, categoryWeeklyDigest)
+	if err != nil {
+		return err
+	}
+	if !enabled {
+		telemetry.RecordMailSkipped(categoryWeeklyDigest, "opted_out")
+		return nil
+	}
+
+	all, err := s.store.WeeklyDigest(ctx, userID, since, until)
+	if err != nil {
+		return err
+	}
+	families := make([]emails.DigestFamily, 0, len(all))
+	for _, family := range all {
+		if !family.Empty() {
+			families = append(families, family)
+		}
+	}
+	if len(families) == 0 {
+		telemetry.RecordMailSkipped(categoryWeeklyDigest, "empty")
+		return nil
+	}
+
+	return s.deliverNotification(ctx, userID, categoryWeeklyDigest, info.Email, emails.WeeklyDigest(info.DisplayName, families, s.links.Home()))
 }
 
 func (s *Service) skipDisabled(event string) error {

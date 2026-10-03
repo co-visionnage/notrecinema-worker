@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"notrecinema/worker/internal/emails"
 	"notrecinema/worker/internal/mailer"
 	"notrecinema/worker/internal/unsubscribe"
 )
@@ -49,6 +50,9 @@ type fakeStore struct {
 	invitationTokens map[string]storedToken
 	invitationGone   map[string]bool
 
+	digest    []emails.DigestFamily
+	digestErr error
+
 	gotFamilyID string
 	gotExclude  *string
 	gotCategory string
@@ -77,6 +81,10 @@ func (f *fakeStore) FamilyRecipients(_ context.Context, familyID string, exclude
 
 func (f *fakeStore) UserEmailEnabled(_ context.Context, userID, _ string) (bool, error) {
 	return !f.emailOff[userID], nil
+}
+
+func (f *fakeStore) WeeklyDigest(_ context.Context, _ string, _, _ time.Time) ([]emails.DigestFamily, error) {
+	return f.digest, f.digestErr
 }
 
 func (f *fakeStore) InvitationInfo(_ context.Context, invitationID string) (InvitationInfo, error) {
@@ -589,5 +597,93 @@ func TestFamilyInvitationFailureIsReturnedForRetry(t *testing.T) {
 
 	if err := newTestService(sender, store).SendFamilyInvitation(context.Background(), "inv-3"); err == nil {
 		t.Error("an invitation delivery failure must be returned so the event is retried")
+	}
+}
+
+func digestStore() *fakeStore {
+	return &fakeStore{
+		users: map[string]UserInfo{"u1": {Email: "anna@example.com", DisplayName: "Аня", Verified: true}},
+		digest: []emails.DigestFamily{
+			{Name: "Семья", Added: []emails.DigestItem{{Title: "Шоу", Detail: "Борис"}}},
+			{Name: "Пустая семья"},
+		},
+	}
+}
+
+func TestSendWeeklyDigestDeliversOnlyFamiliesWithNews(t *testing.T) {
+	sender := &fakeSender{enabled: true}
+	svc := newTestService(sender, digestStore())
+
+	if err := svc.SendWeeklyDigest(context.Background(), "u1", fixedNow.Add(-7*24*time.Hour), fixedNow); err != nil {
+		t.Fatalf("SendWeeklyDigest() error: %v", err)
+	}
+	if len(sender.sent) != 1 || sender.sent[0].To != "anna@example.com" {
+		t.Fatalf("sent = %+v, want one letter to anna@example.com", sender.sent)
+	}
+	msg := sender.sent[0]
+	if !strings.Contains(msg.Text, "Шоу") || strings.Contains(msg.Text, "Пустая семья") {
+		t.Errorf("the digest must list the family with news and skip the empty one:\n%s", msg.Text)
+	}
+	// Это обычное уведомление: в нём есть отписка в один клик.
+	if msg.Headers["List-Unsubscribe-Post"] != "List-Unsubscribe=One-Click" || !strings.Contains(msg.Text, "/unsubscribe?token=") {
+		t.Errorf("the digest has no unsubscribe link:\n%s", msg.Text)
+	}
+}
+
+func TestSendWeeklyDigestStaysSilentWhenThereIsNothingToTell(t *testing.T) {
+	store := digestStore()
+	store.digest = []emails.DigestFamily{{Name: "Тихая семья"}}
+	sender := &fakeSender{enabled: true}
+
+	if err := newTestService(sender, store).SendWeeklyDigest(context.Background(), "u1", fixedNow.Add(-7*24*time.Hour), fixedNow); err != nil {
+		t.Fatalf("SendWeeklyDigest() error: %v", err)
+	}
+	if len(sender.sent) != 0 {
+		t.Errorf("sent %d letters for an empty week", len(sender.sent))
+	}
+}
+
+func TestSendWeeklyDigestRespectsVerificationAndOptOut(t *testing.T) {
+	cases := map[string]func(*fakeStore){
+		"unverified": func(f *fakeStore) { f.users["u1"] = UserInfo{Email: "anna@example.com", Verified: false} },
+		"opted out":  func(f *fakeStore) { f.emailOff = map[string]bool{"u1": true} },
+		"no user":    func(f *fakeStore) { delete(f.users, "u1") },
+	}
+	for name, mutate := range cases {
+		t.Run(name, func(t *testing.T) {
+			store := digestStore()
+			mutate(store)
+			sender := &fakeSender{enabled: true}
+
+			if err := newTestService(sender, store).SendWeeklyDigest(context.Background(), "u1", fixedNow.Add(-7*24*time.Hour), fixedNow); err != nil {
+				t.Fatalf("SendWeeklyDigest() error: %v", err)
+			}
+			if len(sender.sent) != 0 {
+				t.Errorf("sent %d letters, want none", len(sender.sent))
+			}
+		})
+	}
+}
+
+func TestSendWeeklyDigestReturnsStoreAndSendErrorsSoTheEventIsRetried(t *testing.T) {
+	store := digestStore()
+	store.digestErr = errors.New("db down")
+	if err := newTestService(&fakeSender{enabled: true}, store).SendWeeklyDigest(context.Background(), "u1", fixedNow.Add(-time.Hour), fixedNow); err == nil {
+		t.Error("a store error was swallowed")
+	}
+
+	sender := &fakeSender{enabled: true, failFor: map[string]error{"anna@example.com": errors.New("resend 500")}}
+	if err := newTestService(sender, digestStore()).SendWeeklyDigest(context.Background(), "u1", fixedNow.Add(-time.Hour), fixedNow); err == nil {
+		t.Error("a send error was swallowed")
+	}
+}
+
+func TestSendWeeklyDigestIsSkippedWhenMailIsNotConfigured(t *testing.T) {
+	sender := &fakeSender{enabled: false}
+	if err := newTestService(sender, digestStore()).SendWeeklyDigest(context.Background(), "u1", fixedNow.Add(-time.Hour), fixedNow); err != nil {
+		t.Fatalf("SendWeeklyDigest() error: %v", err)
+	}
+	if len(sender.sent) != 0 {
+		t.Error("a letter went out although mail is disabled")
 	}
 }

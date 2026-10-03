@@ -132,6 +132,7 @@ func run(logger *slog.Logger) error {
 	c.Handle("security.backup_codes_regenerated", handlers.BackupCodesRegenerated(logger, mail))
 	c.Handle("email.welcome", handlers.Welcome(logger, mail))
 	c.Handle("family.invitation_requested", handlers.FamilyInvitationRequested(logger, mail))
+	c.Handle("email.weekly_digest", handlers.WeeklyDigest(logger, mail))
 
 	// Минимальный HTTP-сервер для docker/k8s healthcheck и Prometheus -- у
 	// воркера нет публичного API, но метрики и пробы всё равно нужно

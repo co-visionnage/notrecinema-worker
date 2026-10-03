@@ -385,3 +385,66 @@ func TestInvitationStoreRoundTrip(t *testing.T) {
 		t.Errorf("CreateInvitationToken(accepted) = (%v, %v), want (false, nil)", stored, err)
 	}
 }
+
+// seedAs выполняет SQL от имени пользователя (RLS смотрит на
+// app.current_user_id), как это делает API.
+func seedAs(t *testing.T, conn *pgx.Conn, userID, sql string, args ...any) {
+	t.Helper()
+	ctx := context.Background()
+	tx, err := conn.Begin(ctx)
+	if err != nil {
+		t.Fatalf("begin: %v", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	if _, err := tx.Exec(ctx, "SELECT set_config('app.current_user_id', $1, true)", userID); err != nil {
+		t.Fatalf("set context: %v", err)
+	}
+	if _, err := tx.Exec(ctx, sql, args...); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		t.Fatalf("commit: %v", err)
+	}
+}
+
+func TestWeeklyDigestGroupsRowsByFamilyAndSection(t *testing.T) {
+	pool, conn := connect(t)
+	store := mailing.NewPgStore(pool)
+	ctx := context.Background()
+
+	ownerID, _ := verifiedUser(t, conn, "Борис")
+	friendID, _ := verifiedUser(t, conn, "Аня")
+	familyID := createFamily(t, conn, ownerID, friendID)
+
+	seedAs(t, conn, ownerID, `INSERT INTO public.family_series (family_id, title, created_by) VALUES ($1, 'Новое шоу', $2)`, familyID, ownerID)
+	seedAs(t, conn, ownerID, `
+		INSERT INTO public.family_watch_events (family_id, created_by, title, scheduled_at)
+		VALUES ($1, $2, 'Киновечер', NOW() + interval '2 days')
+	`, familyID, ownerID)
+
+	until := time.Now().UTC().Add(time.Minute)
+	families, err := store.WeeklyDigest(ctx, friendID, until.Add(-7*24*time.Hour), until)
+	if err != nil {
+		t.Fatalf("WeeklyDigest() error: %v", err)
+	}
+	if len(families) != 1 || families[0].Name != "Mailing Test" {
+		t.Fatalf("families = %+v, want the one family the user belongs to", families)
+	}
+	family := families[0]
+	if len(family.Added) != 1 || family.Added[0].Title != "Новое шоу" || family.Added[0].Detail != "Борис" {
+		t.Errorf("added = %+v", family.Added)
+	}
+	if len(family.Events) != 1 || family.Events[0].Title != "Киновечер" || family.Events[0].At.IsZero() {
+		t.Errorf("events = %+v", family.Events)
+	}
+	if family.Empty() {
+		t.Error("a family with news reports Empty()")
+	}
+
+	// Чужой пользователь ничего не видит.
+	strangerID, _ := verifiedUser(t, conn, "Посторонний")
+	none, err := store.WeeklyDigest(ctx, strangerID, until.Add(-7*24*time.Hour), until)
+	if err != nil || len(none) != 0 {
+		t.Errorf("a stranger got %+v, %v", none, err)
+	}
+}

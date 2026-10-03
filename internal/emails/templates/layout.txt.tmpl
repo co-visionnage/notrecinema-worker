@@ -6,6 +6,9 @@
 {{end}}{{if .Highlight}}
 {{if .Highlight.Label}}{{.Highlight.Label}}: {{end}}{{.Highlight.Title}}{{if .Highlight.Text}}
 {{.Highlight.Text}}{{end}}
+{{end}}{{range .Sections}}
+{{.Title}}:{{range .Items}}
+ - {{.}}{{end}}
 {{end}}{{if .Button}}
 {{.Button.Label}}:
 {{.Button.URL}}
