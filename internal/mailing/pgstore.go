@@ -47,11 +47,17 @@ func (p *PgStore) UserInfo(ctx context.Context, userID string) (UserInfo, error)
 	return info, nil
 }
 
-func (p *PgStore) FamilyRecipients(ctx context.Context, familyID string, excludeUserID *string) ([]Recipient, error) {
+func (p *PgStore) UserEmailEnabled(ctx context.Context, userID, category string) (bool, error) {
+	var enabled bool
+	err := p.db.QueryRow(ctx, `SELECT public.notification_enabled($1, $2, 'email')`, userID, category).Scan(&enabled)
+	return enabled, err
+}
+
+func (p *PgStore) FamilyRecipients(ctx context.Context, familyID string, excludeUserID *string, category string) ([]Recipient, error) {
 	rows, err := p.db.Query(ctx, `
-		SELECT email, display_name
-		FROM public.get_family_member_mail_info_system($1, $2)
-	`, familyID, excludeUserID)
+		SELECT user_id, email, display_name
+		FROM public.get_family_member_mail_info_system($1, $2, $3)
+	`, familyID, excludeUserID, category)
 	if err != nil {
 		return nil, err
 	}
@@ -63,7 +69,7 @@ func (p *PgStore) FamilyRecipients(ctx context.Context, familyID string, exclude
 			r           Recipient
 			displayName *string
 		)
-		if err := rows.Scan(&r.Email, &displayName); err != nil {
+		if err := rows.Scan(&r.UserID, &r.Email, &displayName); err != nil {
 			return nil, err
 		}
 		if displayName != nil {
@@ -72,4 +78,24 @@ func (p *PgStore) FamilyRecipients(ctx context.Context, familyID string, exclude
 		recipients = append(recipients, r)
 	}
 	return recipients, rows.Err()
+}
+
+func (p *PgStore) InvitationInfo(ctx context.Context, invitationID string) (InvitationInfo, error) {
+	var info InvitationInfo
+	err := p.db.QueryRow(ctx, `
+		SELECT email, family_name, inviter_name
+		FROM public.get_family_invitation_mail_info_system($1)
+	`, invitationID).Scan(&info.Email, &info.FamilyName, &info.InviterName)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return InvitationInfo{}, ErrInvitationNotFound
+	}
+	return info, err
+}
+
+func (p *PgStore) CreateInvitationToken(ctx context.Context, invitationID, tokenHash string, expiresAt time.Time) (bool, error) {
+	var stored bool
+	err := p.db.QueryRow(ctx, `
+		SELECT public.create_family_invitation_token($1, $2, $3)
+	`, invitationID, tokenHash, expiresAt).Scan(&stored)
+	return stored, err
 }

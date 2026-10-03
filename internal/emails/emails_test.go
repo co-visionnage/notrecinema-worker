@@ -21,6 +21,11 @@ func allContents() map[string]Content {
 		"series":          SeriesAdded("Аня", "Во все тяжкие", links.Series("abc")),
 		"season":          SeasonUpdated("Аня", "Во все тяжкие", 5, links.Home()),
 		"stale":           ProgressStale("Аня", "Во все тяжкие", 2, 7, links.Series("abc")),
+		"backup-used":     BackupCodeUsed("Аня", 7, links.Settings()),
+		"backup-low":      BackupCodeUsed("Аня", 1, links.Settings()),
+		"backup-regen":    BackupCodesRegenerated("Аня", links.Settings()),
+		"welcome":         Welcome("Аня", links.Home()),
+		"invitation":      FamilyInvitation("Борис", "Семья Ивановых", links.Invite("tok")),
 		"no-name-verify":  VerifyEmail("", links.VerifyEmail("tok")),
 		"no-name-deleted": AccountDeleted("   "),
 	}
@@ -190,5 +195,90 @@ func TestWritePreviews(t *testing.T) {
 	index.WriteString("</ul>")
 	if err := os.WriteFile(filepath.Join(dir, "index.html"), []byte(index.String()), 0o644); err != nil {
 		t.Fatalf("write index: %v", err)
+	}
+}
+
+func TestNotificationFooterOffersUnsubscribe(t *testing.T) {
+	links := NewLinks("https://notrecinema.ru")
+	content := SeriesAdded("Аня", "Шоу", links.Series("1"))
+	content.UnsubscribeURL = links.Unsubscribe("tok")
+	content.PreferencesURL = links.Settings()
+
+	out, err := Render(content)
+	if err != nil {
+		t.Fatalf("Render() error: %v", err)
+	}
+	for _, want := range []string{"https://notrecinema.ru/unsubscribe?token=tok", "https://notrecinema.ru/settings"} {
+		if !strings.Contains(out.HTML, want) {
+			t.Errorf("html footer lacks %q", want)
+		}
+		if !strings.Contains(out.Text, want) {
+			t.Errorf("text footer lacks %q", want)
+		}
+	}
+	if !strings.Contains(out.HTML, "Отписаться от таких писем") {
+		t.Error("html footer lacks the unsubscribe wording")
+	}
+}
+
+func TestTransactionalLettersHaveNoUnsubscribe(t *testing.T) {
+	for name, content := range map[string]Content{
+		"verify":     VerifyEmail("Аня", "https://notrecinema.ru/verify-email?token=t"),
+		"reset":      PasswordReset("Аня", "https://notrecinema.ru/reset-password?token=t"),
+		"password":   PasswordChanged("Аня", "https://notrecinema.ru/forgot-password"),
+		"backup":     BackupCodeUsed("Аня", 3, "https://notrecinema.ru/settings"),
+		"invitation": FamilyInvitation("Борис", "Семья", "https://notrecinema.ru/invite?token=t"),
+		"welcome":    Welcome("Аня", "https://notrecinema.ru/"),
+	} {
+		out, err := Render(content)
+		if err != nil {
+			t.Fatalf("%s: Render() error: %v", name, err)
+		}
+		if strings.Contains(out.HTML, "Отписаться") || strings.Contains(out.Text, "Отписаться") {
+			t.Errorf("%s: a transactional letter must not offer to unsubscribe (it cannot be turned off)", name)
+		}
+	}
+}
+
+func TestBackupCodeLetterWarnsWhenCodesRunLow(t *testing.T) {
+	few := BackupCodeUsed("Аня", 2, "https://notrecinema.ru/settings")
+	many := BackupCodeUsed("Аня", 8, "https://notrecinema.ru/settings")
+
+	joined := func(c Content) string { return strings.Join(c.Paragraphs, " ") }
+	if !strings.Contains(joined(few), "Кодов осталось совсем мало") {
+		t.Error("the low-codes warning is missing at 2 remaining")
+	}
+	if strings.Contains(joined(many), "Кодов осталось совсем мало") {
+		t.Error("the low-codes warning is shown with 8 remaining")
+	}
+	if !strings.Contains(joined(many), "8") {
+		t.Error("the remaining count is not mentioned")
+	}
+}
+
+func TestInvitationLetterNamesFamilyAndInviter(t *testing.T) {
+	c := FamilyInvitation("Борис", "Семья Ивановых", "https://notrecinema.ru/invite?token=t")
+	if !strings.Contains(c.Subject, "Борис") || !strings.Contains(c.Subject, "Семья Ивановых") {
+		t.Errorf("subject = %q", c.Subject)
+	}
+	if c.Highlight == nil || c.Highlight.Title != "Семья Ивановых" {
+		t.Errorf("highlight = %+v", c.Highlight)
+	}
+}
+
+func TestLinksForNewPages(t *testing.T) {
+	links := NewLinks("https://notrecinema.ru/")
+	cases := map[string]string{
+		links.Settings():              "https://notrecinema.ru/settings",
+		links.Invite("a b"):           "https://notrecinema.ru/invite?token=a+b",
+		links.Unsubscribe("x.y"):      "https://notrecinema.ru/unsubscribe?token=x.y",
+		links.UnsubscribeAPI("x.y"):   "https://notrecinema.ru/api/v1/unsubscribe?token=x.y",
+		links.ResetPassword("t/1"):    "https://notrecinema.ru/reset-password?token=t%2F1",
+		links.Series("id with space"): "https://notrecinema.ru/series/id%20with%20space",
+	}
+	for got, want := range cases {
+		if got != want {
+			t.Errorf("link = %q, want %q", got, want)
+		}
 	}
 }

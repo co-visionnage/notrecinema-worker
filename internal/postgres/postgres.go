@@ -12,6 +12,8 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
+
+	"notrecinema/worker/internal/telemetry"
 )
 
 type Pool struct {
@@ -27,6 +29,7 @@ func Connect(ctx context.Context, databaseURL string) (*Pool, error) {
 	poolConfig.MaxConns = 10
 	poolConfig.MaxConnIdleTime = 30 * time.Second
 	poolConfig.ConnConfig.ConnectTimeout = 5 * time.Second
+	poolConfig.ConnConfig.Tracer = telemetry.QueryTracer{}
 
 	pool, err := pgxpool.NewWithConfig(ctx, poolConfig)
 	if err != nil {
@@ -34,6 +37,11 @@ func Connect(ctx context.Context, databaseURL string) (*Pool, error) {
 	}
 
 	return &Pool{pool: pool}, nil
+}
+
+// Stat отдаёт состояние пула соединений (для метрик).
+func (p *Pool) Stat() *pgxpool.Stat {
+	return p.pool.Stat()
 }
 
 func (p *Pool) Close() {

@@ -26,7 +26,7 @@ func PollCreated(logger *slog.Logger, notifier *notifications.Notifier) func(ctx
 
 		logger.Info("обработано событие poll.created", "poll_id", p.PollID, "family_id", p.FamilyID)
 
-		return notifier.NotifyFamily(ctx, p.FamilyID, p.CreatedBy, webpush.Payload{
+		return notifier.NotifyFamily(ctx, p.FamilyID, p.CreatedBy, "poll", webpush.Payload{
 			Title: "Новый опрос",
 			Body:  fmt.Sprintf("«%s» — проголосуйте за то, что смотрим", p.Title),
 		})
@@ -49,7 +49,7 @@ func PollClosed(logger *slog.Logger, notifier *notifications.Notifier) func(ctx 
 
 		logger.Info("обработано событие poll.closed", "poll_id", p.PollID, "family_id", p.FamilyID)
 
-		return notifier.NotifyFamily(ctx, p.FamilyID, p.ClosedBy, webpush.Payload{
+		return notifier.NotifyFamily(ctx, p.FamilyID, p.ClosedBy, "poll", webpush.Payload{
 			Title: "Опрос закрыт",
 			Body:  fmt.Sprintf("«%s» — результаты голосования готовы", p.Title),
 		})

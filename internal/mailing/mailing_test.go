@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"notrecinema/worker/internal/mailer"
+	"notrecinema/worker/internal/unsubscribe"
 )
 
 type fakeSender struct {
@@ -41,8 +42,16 @@ type fakeStore struct {
 	tokens     []storedToken
 	tokenErr   error
 
+	// emailOff -- пользователи, выключившие почту (по умолчанию включена).
+	emailOff map[string]bool
+
+	invitations      map[string]InvitationInfo
+	invitationTokens map[string]storedToken
+	invitationGone   map[string]bool
+
 	gotFamilyID string
 	gotExclude  *string
+	gotCategory string
 }
 
 func (f *fakeStore) CreateEmailToken(_ context.Context, userID, kind, tokenHash string, expiresAt time.Time) error {
@@ -61,15 +70,40 @@ func (f *fakeStore) UserInfo(_ context.Context, userID string) (UserInfo, error)
 	return info, nil
 }
 
-func (f *fakeStore) FamilyRecipients(_ context.Context, familyID string, exclude *string) ([]Recipient, error) {
-	f.gotFamilyID, f.gotExclude = familyID, exclude
+func (f *fakeStore) FamilyRecipients(_ context.Context, familyID string, exclude *string, category string) ([]Recipient, error) {
+	f.gotFamilyID, f.gotExclude, f.gotCategory = familyID, exclude, category
 	return f.recipients, nil
 }
+
+func (f *fakeStore) UserEmailEnabled(_ context.Context, userID, _ string) (bool, error) {
+	return !f.emailOff[userID], nil
+}
+
+func (f *fakeStore) InvitationInfo(_ context.Context, invitationID string) (InvitationInfo, error) {
+	info, ok := f.invitations[invitationID]
+	if !ok {
+		return InvitationInfo{}, ErrInvitationNotFound
+	}
+	return info, nil
+}
+
+func (f *fakeStore) CreateInvitationToken(_ context.Context, invitationID, tokenHash string, expiresAt time.Time) (bool, error) {
+	if f.invitationGone[invitationID] {
+		return false, nil
+	}
+	if f.invitationTokens == nil {
+		f.invitationTokens = map[string]storedToken{}
+	}
+	f.invitationTokens[invitationID] = storedToken{kind: "invitation", hash: tokenHash, expiresAt: expiresAt}
+	return true, nil
+}
+
+const testSecret = "mailing-test-secret"
 
 var fixedNow = time.Date(2026, 10, 2, 12, 0, 0, 0, time.UTC)
 
 func newTestService(sender *fakeSender, store *fakeStore) *Service {
-	svc := NewService(sender, store, "https://notrecinema.ru/", slog.New(slog.NewTextHandler(io.Discard, nil)))
+	svc := NewService(sender, store, "https://notrecinema.ru/", testSecret, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	svc.now = func() time.Time { return fixedNow }
 	return svc
 }
@@ -265,8 +299,8 @@ func TestSendAccountDeletedUsesPayloadData(t *testing.T) {
 func TestFamilyNotificationsGoToEachRecipientSeparately(t *testing.T) {
 	sender := &fakeSender{enabled: true}
 	store := &fakeStore{recipients: []Recipient{
-		{Email: "a@example.com", DisplayName: "Аня"},
-		{Email: "b@example.com", DisplayName: "Борис"},
+		{UserID: "ua", Email: "a@example.com", DisplayName: "Аня"},
+		{UserID: "ub", Email: "b@example.com", DisplayName: "Борис"},
 	}}
 	svc := newTestService(sender, store)
 	actor := "actor-id"
@@ -297,7 +331,7 @@ func TestFamilyNotificationsGoToEachRecipientSeparately(t *testing.T) {
 
 func TestFamilyNotificationsAreBestEffort(t *testing.T) {
 	sender := &fakeSender{enabled: true, failFor: map[string]error{"a@example.com": errors.New("bounce")}}
-	store := &fakeStore{recipients: []Recipient{{Email: "a@example.com"}, {Email: "b@example.com"}}}
+	store := &fakeStore{recipients: []Recipient{{UserID: "ua", Email: "a@example.com"}, {UserID: "ub", Email: "b@example.com"}}}
 	svc := newTestService(sender, store)
 
 	svc.NotifyFamilySeasonUpdated(context.Background(), "fam-1", nil, "Шоу", 3)
@@ -369,5 +403,191 @@ func TestHashTokenMatchesAPIFormat(t *testing.T) {
 	const want = "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
 	if got := HashToken("abc"); got != want {
 		t.Errorf("HashToken(abc) = %s, want %s", got, want)
+	}
+}
+
+func TestFamilyNotificationsCarryUnsubscribeAndAreScopedToTheCategory(t *testing.T) {
+	sender := &fakeSender{enabled: true}
+	store := &fakeStore{recipients: []Recipient{{UserID: "ua", Email: "a@example.com", DisplayName: "Аня"}}}
+	svc := newTestService(sender, store)
+
+	svc.NotifyFamilySeriesAdded(context.Background(), "fam-1", nil, "s1", "Шоу")
+	svc.NotifyFamilySeasonUpdated(context.Background(), "fam-1", nil, "Шоу", 2)
+
+	if len(sender.sent) != 2 {
+		t.Fatalf("sent = %d, want 2", len(sender.sent))
+	}
+
+	// Категория запрашивается у БД: настройки пользователей учитывает SQL.
+	if store.gotCategory != "season_update" {
+		t.Errorf("last category = %q, want season_update", store.gotCategory)
+	}
+
+	for i, category := range []string{"series_added", "season_update"} {
+		msg := sender.sent[i]
+		token := unsubscribe.Sign([]byte(testSecret), "ua", category)
+
+		if !strings.Contains(msg.Text, "https://notrecinema.ru/unsubscribe?token="+token) {
+			t.Errorf("%s: the footer has no unsubscribe link for that exact category", category)
+		}
+		if !strings.Contains(msg.Text, "https://notrecinema.ru/settings") {
+			t.Errorf("%s: the footer has no link to the settings", category)
+		}
+		if got := msg.Headers["List-Unsubscribe"]; got != "<https://notrecinema.ru/api/v1/unsubscribe?token="+token+">" {
+			t.Errorf("%s: List-Unsubscribe = %q", category, got)
+		}
+		if got := msg.Headers["List-Unsubscribe-Post"]; got != "List-Unsubscribe=One-Click" {
+			t.Errorf("%s: List-Unsubscribe-Post = %q", category, got)
+		}
+	}
+}
+
+func TestProgressReminderHonoursTheEmailSwitch(t *testing.T) {
+	sender := &fakeSender{enabled: true}
+	store := &fakeStore{
+		users:    map[string]UserInfo{"v": {Email: "v@example.com", DisplayName: "Вера", Verified: true}},
+		emailOff: map[string]bool{"v": true},
+	}
+	svc := newTestService(sender, store)
+
+	svc.NotifyUserProgressStale(context.Background(), "v", "s1", "Шоу", 2, 7)
+	if len(sender.sent) != 0 {
+		t.Error("a reminder was sent although the user switched the email off")
+	}
+
+	store.emailOff["v"] = false
+	svc.NotifyUserProgressStale(context.Background(), "v", "s1", "Шоу", 2, 7)
+	if len(sender.sent) != 1 {
+		t.Fatalf("sent = %d, want 1", len(sender.sent))
+	}
+	token := unsubscribe.Sign([]byte(testSecret), "v", "progress_reminder")
+	if !strings.Contains(sender.sent[0].Text, token) {
+		t.Error("the reminder has no unsubscribe link for its category")
+	}
+}
+
+func TestTransactionalLettersCarryNoUnsubscribe(t *testing.T) {
+	sender := &fakeSender{enabled: true}
+	store := &fakeStore{users: map[string]UserInfo{"u1": {Email: "anna@example.com", DisplayName: "Аня", Verified: true}}}
+	svc := newTestService(sender, store)
+	ctx := context.Background()
+
+	_ = svc.SendPasswordReset(ctx, "u1")
+	_ = svc.SendPasswordChanged(ctx, "u1")
+	_ = svc.SendBackupCodeUsed(ctx, "u1", 5)
+	_ = svc.SendBackupCodesRegenerated(ctx, "u1")
+	_ = svc.SendWelcome(ctx, "u1")
+
+	if len(sender.sent) != 5 {
+		t.Fatalf("sent = %d, want 5", len(sender.sent))
+	}
+	for _, msg := range sender.sent {
+		if len(msg.Headers) != 0 {
+			t.Errorf("%q: transactional letter has headers %v", msg.Subject, msg.Headers)
+		}
+		if strings.Contains(msg.Text, "Отписаться") {
+			t.Errorf("%q: transactional letter offers to unsubscribe", msg.Subject)
+		}
+	}
+}
+
+func TestBackupCodeLetterReportsTheRemainingCount(t *testing.T) {
+	sender := &fakeSender{enabled: true}
+	store := &fakeStore{users: map[string]UserInfo{
+		"v": {Email: "v@example.com", Verified: true},
+		"u": {Email: "u@example.com", Verified: false},
+	}}
+	svc := newTestService(sender, store)
+
+	if err := svc.SendBackupCodeUsed(context.Background(), "v", 3); err != nil {
+		t.Fatalf("SendBackupCodeUsed() error: %v", err)
+	}
+	if len(sender.sent) != 1 || !strings.Contains(sender.sent[0].Text, "3") {
+		t.Fatalf("sent = %+v", sender.sent)
+	}
+	if err := svc.SendBackupCodeUsed(context.Background(), "u", 3); err != nil || len(sender.sent) != 1 {
+		t.Error("an unverified address got a security notice")
+	}
+}
+
+func TestWelcomeOnlyForVerifiedAddress(t *testing.T) {
+	sender := &fakeSender{enabled: true}
+	store := &fakeStore{users: map[string]UserInfo{
+		"v": {Email: "v@example.com", DisplayName: "Вера", Verified: true},
+		"u": {Email: "u@example.com", Verified: false},
+	}}
+	svc := newTestService(sender, store)
+
+	_ = svc.SendWelcome(context.Background(), "u")
+	if len(sender.sent) != 0 {
+		t.Error("an unverified address got the welcome letter")
+	}
+	_ = svc.SendWelcome(context.Background(), "v")
+	if len(sender.sent) != 1 || !strings.Contains(sender.sent[0].Text, "Привет, Вера!") {
+		t.Errorf("welcome = %+v", sender.sent)
+	}
+}
+
+func TestFamilyInvitationStoresTheHashOfTheEmailedToken(t *testing.T) {
+	sender := &fakeSender{enabled: true}
+	store := &fakeStore{invitations: map[string]InvitationInfo{
+		"inv-1": {Email: "friend@example.com", FamilyName: "Семья Ивановых", InviterName: "Борис"},
+	}}
+	svc := newTestService(sender, store)
+
+	if err := svc.SendFamilyInvitation(context.Background(), "inv-1"); err != nil {
+		t.Fatalf("SendFamilyInvitation() error: %v", err)
+	}
+	if len(sender.sent) != 1 || sender.sent[0].To != "friend@example.com" {
+		t.Fatalf("sent = %+v", sender.sent)
+	}
+
+	m := regexp.MustCompile(`/invite\?token=([0-9a-f]{64})`).FindStringSubmatch(sender.sent[0].Text)
+	if m == nil {
+		t.Fatalf("no invite link in the letter:\n%s", sender.sent[0].Text)
+	}
+	stored := store.invitationTokens["inv-1"]
+	if stored.hash != HashToken(m[1]) || stored.hash == m[1] {
+		t.Error("the stored value is not the hash of the emailed token")
+	}
+	if want := fixedNow.Add(7 * 24 * time.Hour); !stored.expiresAt.Equal(want) {
+		t.Errorf("expiresAt = %v, want %v (7 days)", stored.expiresAt, want)
+	}
+	if !strings.Contains(sender.sent[0].Subject, "Борис") || !strings.Contains(sender.sent[0].Text, "Семья Ивановых") {
+		t.Errorf("letter does not name the inviter and the family: %q", sender.sent[0].Subject)
+	}
+	if len(sender.sent[0].Headers) != 0 {
+		t.Error("an invitation is transactional and must not carry unsubscribe headers")
+	}
+}
+
+func TestFamilyInvitationIsSkippedWhenGone(t *testing.T) {
+	sender := &fakeSender{enabled: true}
+	store := &fakeStore{
+		invitations:    map[string]InvitationInfo{"inv-2": {Email: "x@example.com", FamilyName: "F", InviterName: "I"}},
+		invitationGone: map[string]bool{"inv-2": true},
+	}
+	svc := newTestService(sender, store)
+	ctx := context.Background()
+
+	// Приглашения нет вовсе (отозвано).
+	if err := svc.SendFamilyInvitation(ctx, "no-such"); err != nil {
+		t.Errorf("SendFamilyInvitation(missing) = %v, want nil: a retry cannot help", err)
+	}
+	// Приняли между чтением и записью токена.
+	if err := svc.SendFamilyInvitation(ctx, "inv-2"); err != nil {
+		t.Errorf("SendFamilyInvitation(accepted) = %v, want nil", err)
+	}
+	if len(sender.sent) != 0 {
+		t.Errorf("letters sent for a missing or accepted invitation: %d", len(sender.sent))
+	}
+}
+
+func TestFamilyInvitationFailureIsReturnedForRetry(t *testing.T) {
+	sender := &fakeSender{enabled: true, failFor: map[string]error{"friend@example.com": errors.New("resend down")}}
+	store := &fakeStore{invitations: map[string]InvitationInfo{"inv-3": {Email: "friend@example.com", FamilyName: "F", InviterName: "I"}}}
+
+	if err := newTestService(sender, store).SendFamilyInvitation(context.Background(), "inv-3"); err == nil {
+		t.Error("an invitation delivery failure must be returned so the event is retried")
 	}
 }

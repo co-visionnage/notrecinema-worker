@@ -14,6 +14,8 @@ import (
 	"net/http"
 
 	gowebpush "github.com/SherClockHolmes/webpush-go"
+
+	"notrecinema/worker/internal/telemetry"
 )
 
 type Config struct {
@@ -73,6 +75,7 @@ func (s *Sender) Send(ctx context.Context, sub Subscription, payload Payload) er
 		VAPIDPublicKey:  s.cfg.PublicKey,
 		VAPIDPrivateKey: s.cfg.PrivateKey,
 		TTL:             60,
+		HTTPClient:      telemetry.InstrumentedClient(),
 	})
 	if err != nil {
 		return fmt.Errorf("webpush: send: %w", err)

@@ -35,7 +35,7 @@ func SeriesBulkAdded(logger *slog.Logger, notifier *notifications.Notifier) func
 			noun = "сериал"
 		}
 
-		return notifier.NotifyFamily(ctx, p.FamilyID, p.UserID, webpush.Payload{
+		return notifier.NotifyFamily(ctx, p.FamilyID, p.UserID, "series_added", webpush.Payload{
 			Title: "Новые сериалы в списке",
 			Body:  fmt.Sprintf("Добавлено %d %s", p.AddedCount, noun),
 			URL:   "/",

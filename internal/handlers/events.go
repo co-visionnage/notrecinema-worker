@@ -28,7 +28,7 @@ func WatchEventCreated(logger *slog.Logger, notifier *notifications.Notifier) fu
 
 		logger.Info("обработано событие watch_event.created", "event_id", p.EventID, "family_id", p.FamilyID)
 
-		return notifier.NotifyFamily(ctx, p.FamilyID, p.CreatedBy, webpush.Payload{
+		return notifier.NotifyFamily(ctx, p.FamilyID, p.CreatedBy, "watch_event", webpush.Payload{
 			Title: "Запланирован совместный просмотр",
 			Body:  fmt.Sprintf("«%s» — %s", p.Title, p.ScheduledAt.Format("2 January, 15:04")),
 		})

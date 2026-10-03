@@ -80,3 +80,58 @@ func AccountDeleted(logger *slog.Logger, mail *mailing.Service) func(ctx context
 		return mail.SendAccountDeleted(ctx, p.Email, p.DisplayName, p.EmailVerified)
 	}
 }
+
+// Welcome -- приветствие после подтверждения адреса (или первого входа через
+// GitHub, где адрес подтверждён самим GitHub).
+func Welcome(logger *slog.Logger, mail *mailing.Service) func(ctx context.Context, payload json.RawMessage) error {
+	return userEmailHandler(logger, "email.welcome", mail.SendWelcome)
+}
+
+// BackupCodesRegenerated -- уведомление о перевыпуске резервных кодов 2FA.
+func BackupCodesRegenerated(logger *slog.Logger, mail *mailing.Service) func(ctx context.Context, payload json.RawMessage) error {
+	return userEmailHandler(logger, "security.backup_codes_regenerated", mail.SendBackupCodesRegenerated)
+}
+
+type backupCodeUsedPayload struct {
+	UserID    string `json:"userId"`
+	Remaining int    `json:"remaining"`
+}
+
+// BackupCodeUsed -- уведомление о входе по резервному коду: сколько кодов
+// осталось (число берётся из события, а не из БД: так письмо точно
+// соответствует моменту, когда код был потрачен).
+func BackupCodeUsed(logger *slog.Logger, mail *mailing.Service) func(ctx context.Context, payload json.RawMessage) error {
+	return func(ctx context.Context, payload json.RawMessage) error {
+		var p backupCodeUsedPayload
+		if err := json.Unmarshal(payload, &p); err != nil {
+			return fmt.Errorf("security.backup_code_used: разбор payload: %w", err)
+		}
+		if p.UserID == "" {
+			return fmt.Errorf("security.backup_code_used: в payload нет userId")
+		}
+
+		logger.Info("обработано событие security.backup_code_used", "user_id", p.UserID, "remaining", p.Remaining)
+		return mail.SendBackupCodeUsed(ctx, p.UserID, p.Remaining)
+	}
+}
+
+type invitationRequestedPayload struct {
+	InvitationID string `json:"invitationId"`
+}
+
+// FamilyInvitationRequested -- письмо-приглашение в семью. Токен создаётся
+// здесь, в момент отправки (в событии его нет).
+func FamilyInvitationRequested(logger *slog.Logger, mail *mailing.Service) func(ctx context.Context, payload json.RawMessage) error {
+	return func(ctx context.Context, payload json.RawMessage) error {
+		var p invitationRequestedPayload
+		if err := json.Unmarshal(payload, &p); err != nil {
+			return fmt.Errorf("family.invitation_requested: разбор payload: %w", err)
+		}
+		if p.InvitationID == "" {
+			return fmt.Errorf("family.invitation_requested: в payload нет invitationId")
+		}
+
+		logger.Info("обработано событие family.invitation_requested", "invitation_id", p.InvitationID)
+		return mail.SendFamilyInvitation(ctx, p.InvitationID)
+	}
+}

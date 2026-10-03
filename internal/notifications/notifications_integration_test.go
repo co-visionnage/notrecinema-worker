@@ -191,7 +191,7 @@ func TestNotifyFamilyExcludesActorAndReachesOtherMembers(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(os.Stderr, nil))
 	notifier := notifications.NewNotifier(db, sender, pushCfg, logger)
 
-	if err := notifier.NotifyFamily(ctx, familyID, actor, webpush.Payload{Title: "t", Body: "b"}); err != nil {
+	if err := notifier.NotifyFamily(ctx, familyID, actor, "series_added", webpush.Payload{Title: "t", Body: "b"}); err != nil {
 		t.Fatalf("NotifyFamily() error: %v", err)
 	}
 
@@ -200,5 +200,128 @@ func TestNotifyFamilyExcludesActorAndReachesOtherMembers(t *testing.T) {
 	}
 	if !receivedByOther {
 		t.Error("other (участник семьи) не получил уведомление, want должен был")
+	}
+}
+
+// setPushPreference сохраняет настройку пользователя под его же контекстом
+// (так её сохраняет и API): RLS пускает только в свои строки.
+func setPushPreference(t *testing.T, ctx context.Context, conn *pgx.Conn, userID, category string, push bool) {
+	t.Helper()
+	tx, err := conn.Begin(ctx)
+	if err != nil {
+		t.Fatalf("begin: %v", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	if _, err := tx.Exec(ctx, "SELECT set_config('app.current_user_id', $1, true)", userID); err != nil {
+		t.Fatalf("set context: %v", err)
+	}
+	if _, err := tx.Exec(ctx, `
+		INSERT INTO public.notification_preferences (user_id, category, push, email) VALUES ($1, $2, $3, false)
+		ON CONFLICT (user_id, category) DO UPDATE SET push = EXCLUDED.push
+	`, userID, category, push); err != nil {
+		t.Fatalf("set preference: %v", err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		t.Fatalf("commit: %v", err)
+	}
+}
+
+func newTestNotifier(t *testing.T, ctx context.Context, databaseURL string) *notifications.Notifier {
+	t.Helper()
+	privateKey, publicKey, err := gowebpush.GenerateVAPIDKeys()
+	if err != nil {
+		t.Fatalf("generate VAPID keys: %v", err)
+	}
+	pushCfg := webpush.Config{PublicKey: publicKey, PrivateKey: privateKey, Subject: "mailto:test@example.com"}
+
+	db, err := postgres.Connect(ctx, databaseURL)
+	if err != nil {
+		t.Fatalf("connect pool: %v", err)
+	}
+	t.Cleanup(db.Close)
+
+	logger := slog.New(slog.NewTextHandler(os.Stderr, nil))
+	return notifications.NewNotifier(db, webpush.NewSender(pushCfg), pushCfg, logger)
+}
+
+func TestNotifyFamilySkipsMembersWhoSwitchedTheCategoryOff(t *testing.T) {
+	databaseURL := os.Getenv("DATABASE_URL")
+	if databaseURL == "" {
+		t.Skip("DATABASE_URL не задан, пропускаем интеграционный тест")
+	}
+	ctx := context.Background()
+	conn := rawConnect(t, ctx, databaseURL)
+
+	actor := createTestUser(t, ctx, conn)
+	optedOut := createTestUser(t, ctx, conn)
+	subscribed := createTestUser(t, ctx, conn)
+	familyID := createTestFamilyWithMembers(t, ctx, conn, actor, optedOut, subscribed)
+
+	hits := map[string]int{}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits[r.URL.Path]++
+		w.WriteHeader(http.StatusCreated)
+	}))
+	defer server.Close()
+
+	createTestSubscription(t, ctx, conn, optedOut, server.URL+"/opted-out")
+	createTestSubscription(t, ctx, conn, subscribed, server.URL+"/subscribed")
+	setPushPreference(t, ctx, conn, optedOut, "poll", false)
+
+	notifier := newTestNotifier(t, ctx, databaseURL)
+
+	// Категория "poll" выключена только у одного участника.
+	if err := notifier.NotifyFamily(ctx, familyID, actor, "poll", webpush.Payload{Title: "t", Body: "b"}); err != nil {
+		t.Fatalf("NotifyFamily(poll) error: %v", err)
+	}
+	if hits["/opted-out"] != 0 {
+		t.Error("a member who switched the category off still got the push")
+	}
+	if hits["/subscribed"] != 1 {
+		t.Errorf("a member with default settings got %d pushes, want 1", hits["/subscribed"])
+	}
+
+	// Отказ действует только на свою категорию: другие приходят как раньше.
+	if err := notifier.NotifyFamily(ctx, familyID, actor, "series_added", webpush.Payload{Title: "t", Body: "b"}); err != nil {
+		t.Fatalf("NotifyFamily(series_added) error: %v", err)
+	}
+	if hits["/opted-out"] != 1 {
+		t.Errorf("another category must still reach the member: got %d", hits["/opted-out"])
+	}
+}
+
+func TestNotifyUserHonoursTheCategorySwitch(t *testing.T) {
+	databaseURL := os.Getenv("DATABASE_URL")
+	if databaseURL == "" {
+		t.Skip("DATABASE_URL не задан, пропускаем интеграционный тест")
+	}
+	ctx := context.Background()
+	conn := rawConnect(t, ctx, databaseURL)
+	user := createTestUser(t, ctx, conn)
+
+	hits := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits++
+		w.WriteHeader(http.StatusCreated)
+	}))
+	defer server.Close()
+
+	createTestSubscription(t, ctx, conn, user, server.URL+"/me")
+	notifier := newTestNotifier(t, ctx, databaseURL)
+
+	if err := notifier.NotifyUser(ctx, user, "progress_reminder", webpush.Payload{Title: "t", Body: "b"}); err != nil {
+		t.Fatalf("NotifyUser() error: %v", err)
+	}
+	if hits != 1 {
+		t.Fatalf("pushes by default = %d, want 1", hits)
+	}
+
+	setPushPreference(t, ctx, conn, user, "progress_reminder", false)
+	if err := notifier.NotifyUser(ctx, user, "progress_reminder", webpush.Payload{Title: "t", Body: "b"}); err != nil {
+		t.Fatalf("NotifyUser() error: %v", err)
+	}
+	if hits != 1 {
+		t.Errorf("a push was sent after the category was switched off (total %d)", hits)
 	}
 }

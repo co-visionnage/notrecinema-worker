@@ -10,8 +10,10 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"time"
 
 	"notrecinema/worker/internal/postgres"
+	"notrecinema/worker/internal/telemetry"
 	"notrecinema/worker/internal/webpush"
 )
 
@@ -30,14 +32,18 @@ func NewNotifier(db *postgres.Pool, sender *webpush.Sender, cfg webpush.Config, 
 	return &Notifier{db: db, sender: sender, logger: logger, isConfigured: cfg.Configured()}
 }
 
+// category -- ключ категории уведомлений из настроек пользователя
+// (series_added, poll, ...): push получают только те, у кого эта категория
+// не выключена (миграция 0037, get_*_for_category_system).
+//
 // NotifyFamily отправляет payload всем подпискам участников семьи, кроме
 // excludeUserID (обычно это тот, кто своим действием и породил событие --
 // не нужно уведомлять человека о его собственном действии). Использует
 // get_family_push_subscriptions_system: SECURITY DEFINER функцию из схемы,
 // которая не требует app.current_user_id (у воркера в принципе нет
 // пользовательского контекста -- он не действует от лица кого-то одного).
-func (n *Notifier) NotifyFamily(ctx context.Context, familyID, excludeUserID string, payload webpush.Payload) error {
-	return n.NotifyFamilyExcept(ctx, familyID, &excludeUserID, payload)
+func (n *Notifier) NotifyFamily(ctx context.Context, familyID, excludeUserID, category string, payload webpush.Payload) error {
+	return n.NotifyFamilyExcept(ctx, familyID, &excludeUserID, category, payload)
 }
 
 // NotifyFamilyExcept — то же самое, что NotifyFamily, но exclude может быть
@@ -46,15 +52,15 @@ func (n *Notifier) NotifyFamily(ctx context.Context, familyID, excludeUserID str
 // конкретный пользователь, а фоновая проверка без актора -- например
 // internal/seasons при массовом cron-обновлении, в отличие от его же
 // разового пользовательского запроса, который исключает самого себя.
-func (n *Notifier) NotifyFamilyExcept(ctx context.Context, familyID string, excludeUserID *string, payload webpush.Payload) error {
+func (n *Notifier) NotifyFamilyExcept(ctx context.Context, familyID string, excludeUserID *string, category string, payload webpush.Payload) error {
 	if !n.isConfigured {
 		return nil
 	}
 
 	rows, err := n.db.Query(ctx, `
 		SELECT endpoint, p256dh, auth
-		FROM public.get_family_push_subscriptions_system($1, $2)
-	`, familyID, excludeUserID)
+		FROM public.get_family_push_subscriptions_for_category_system($1, $2, $3)
+	`, familyID, excludeUserID, category)
 	if err != nil {
 		return err
 	}
@@ -72,7 +78,7 @@ func (n *Notifier) NotifyFamilyExcept(ctx context.Context, familyID string, excl
 		return err
 	}
 
-	n.sendAll(ctx, subs, payload)
+	n.sendAll(ctx, category, subs, payload)
 	return nil
 }
 
@@ -81,15 +87,15 @@ func (n *Notifier) NotifyFamilyExcept(ctx context.Context, familyID string, excl
 // семьи (например, напоминание о заброшенном сериале). Использует
 // get_user_push_subscriptions_system (SECURITY DEFINER, миграция 0011) по
 // той же причине, что и NotifyFamily: у воркера нет app.current_user_id.
-func (n *Notifier) NotifyUser(ctx context.Context, userID string, payload webpush.Payload) error {
+func (n *Notifier) NotifyUser(ctx context.Context, userID, category string, payload webpush.Payload) error {
 	if !n.isConfigured {
 		return nil
 	}
 
 	rows, err := n.db.Query(ctx, `
 		SELECT endpoint, p256dh, auth
-		FROM public.get_user_push_subscriptions_system($1)
-	`, userID)
+		FROM public.get_user_push_subscriptions_for_category_system($1, $2)
+	`, userID, category)
 	if err != nil {
 		return err
 	}
@@ -107,14 +113,16 @@ func (n *Notifier) NotifyUser(ctx context.Context, userID string, payload webpus
 		return err
 	}
 
-	n.sendAll(ctx, subs, payload)
+	n.sendAll(ctx, category, subs, payload)
 	return nil
 }
 
-func (n *Notifier) sendAll(ctx context.Context, subs []webpush.Subscription, payload webpush.Payload) {
+func (n *Notifier) sendAll(ctx context.Context, category string, subs []webpush.Subscription, payload webpush.Payload) {
 	for _, sub := range subs {
+		started := time.Now()
 		err := n.sender.Send(ctx, sub, payload)
 		if err == nil {
+			telemetry.RecordPush(category, "sent", started)
 			continue
 		}
 
@@ -126,11 +134,13 @@ func (n *Notifier) sendAll(ctx context.Context, subs []webpush.Subscription, pay
 		// (SECURITY DEFINER, миграция 0029) скоупится по endpoint, а не по
 		// пользователю, ровно потому что это всё, что известно в точке отказа.
 		if errors.Is(err, webpush.ErrDeadSubscription) {
+			telemetry.RecordPush(category, "dead_subscription", started)
 			n.logger.Debug("notifications: подписка больше не существует, удаляем", "endpoint", sub.Endpoint)
 			n.deleteDeadSubscription(ctx, sub.Endpoint)
 			continue
 		}
 
+		telemetry.RecordPush(category, "failed", started)
 		n.logger.Error("notifications: не удалось отправить push", "endpoint", sub.Endpoint, "error", err)
 	}
 }

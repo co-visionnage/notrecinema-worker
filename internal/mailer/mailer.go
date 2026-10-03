@@ -11,6 +11,8 @@ import (
 	"net/http"
 	"strings"
 	"time"
+
+	"notrecinema/worker/internal/telemetry"
 )
 
 // Message -- одно письмо одному адресату. Адресаты намеренно не
@@ -21,6 +23,10 @@ type Message struct {
 	Subject string
 	HTML    string
 	Text    string
+	// Headers -- дополнительные заголовки письма. Для рассылок это
+	// List-Unsubscribe и List-Unsubscribe-Post (RFC 8058): почтовые клиенты
+	// показывают кнопку «Отписаться» рядом с отправителем.
+	Headers map[string]string
 }
 
 // Sender -- всё, что нужно остальному коду от почтового транспорта.
@@ -62,7 +68,8 @@ type Resend struct {
 
 func NewResend(apiKey, from, replyTo string, httpClient *http.Client) *Resend {
 	if httpClient == nil {
-		httpClient = &http.Client{Timeout: 15 * time.Second}
+		httpClient = telemetry.InstrumentedClient()
+		httpClient.Timeout = 15 * time.Second
 	}
 	return &Resend{
 		apiKey:     apiKey,
@@ -84,12 +91,13 @@ func (r *Resend) Enabled() bool {
 }
 
 type sendRequest struct {
-	From    string   `json:"from"`
-	To      []string `json:"to"`
-	Subject string   `json:"subject"`
-	HTML    string   `json:"html"`
-	Text    string   `json:"text"`
-	ReplyTo string   `json:"reply_to,omitempty"`
+	From    string            `json:"from"`
+	To      []string          `json:"to"`
+	Subject string            `json:"subject"`
+	HTML    string            `json:"html"`
+	Text    string            `json:"text"`
+	ReplyTo string            `json:"reply_to,omitempty"`
+	Headers map[string]string `json:"headers,omitempty"`
 }
 
 func (r *Resend) Send(ctx context.Context, msg Message) error {
@@ -104,6 +112,7 @@ func (r *Resend) Send(ctx context.Context, msg Message) error {
 		HTML:    msg.HTML,
 		Text:    msg.Text,
 		ReplyTo: r.replyTo,
+		Headers: msg.Headers,
 	})
 	if err != nil {
 		return fmt.Errorf("resend: сборка запроса: %w", err)

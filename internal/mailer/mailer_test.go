@@ -141,3 +141,47 @@ func TestSendRefusesWhenNotConfigured(t *testing.T) {
 		t.Error("Send() without an API key should fail loudly, not pretend to succeed")
 	}
 }
+
+func TestSendPassesCustomHeaders(t *testing.T) {
+	var gotBody map[string]any
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		body, _ := io.ReadAll(req.Body)
+		_ = json.Unmarshal(body, &gotBody)
+	}))
+	t.Cleanup(server.Close)
+
+	r := NewResend("key", "from@notrecinema.ru", "", nil).WithBaseURL(server.URL)
+	err := r.Send(context.Background(), Message{
+		To: "a@example.com", Subject: "s",
+		Headers: map[string]string{
+			"List-Unsubscribe":      "<https://notrecinema.ru/api/v1/unsubscribe?token=t>",
+			"List-Unsubscribe-Post": "List-Unsubscribe=One-Click",
+		},
+	})
+	if err != nil {
+		t.Fatalf("Send() error: %v", err)
+	}
+
+	headers, _ := gotBody["headers"].(map[string]any)
+	if headers["List-Unsubscribe"] != "<https://notrecinema.ru/api/v1/unsubscribe?token=t>" ||
+		headers["List-Unsubscribe-Post"] != "List-Unsubscribe=One-Click" {
+		t.Errorf("headers = %v", gotBody["headers"])
+	}
+}
+
+func TestSendOmitsHeadersWhenThereAreNone(t *testing.T) {
+	var gotBody map[string]any
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		body, _ := io.ReadAll(req.Body)
+		_ = json.Unmarshal(body, &gotBody)
+	}))
+	t.Cleanup(server.Close)
+
+	r := NewResend("key", "from@notrecinema.ru", "", nil).WithBaseURL(server.URL)
+	if err := r.Send(context.Background(), Message{To: "a@example.com", Subject: "s"}); err != nil {
+		t.Fatalf("Send() error: %v", err)
+	}
+	if _, present := gotBody["headers"]; present {
+		t.Error("headers must be omitted when there are none")
+	}
+}

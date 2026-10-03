@@ -16,3 +16,7 @@
 --
 notrecinema - семейный трекер сериалов
 {{.Reason}}
+{{if .UnsubscribeURL}}
+Отписаться от таких писем: {{.UnsubscribeURL}}{{if .PreferencesURL}}
+Настройки уведомлений: {{.PreferencesURL}}{{end}}
+{{end}}

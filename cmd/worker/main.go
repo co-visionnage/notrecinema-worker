@@ -28,6 +28,9 @@ import (
 	"notrecinema/worker/internal/webpush"
 )
 
+// version подставляется при сборке образа: -ldflags "-X main.version=<sha>".
+var version = "dev"
+
 func main() {
 	logger := logging.New("notrecinema-worker")
 
@@ -59,12 +62,14 @@ func run(logger *slog.Logger) error {
 	}()
 
 	metrics := telemetry.NewMetrics(prometheus.DefaultRegisterer)
+	telemetry.SetBuildInfo("notrecinema-worker", version)
 
 	db, err := postgres.Connect(ctx, cfg.DatabaseURL)
 	if err != nil {
 		return err
 	}
 	defer db.Close()
+	prometheus.MustRegister(telemetry.NewPoolCollector(db.Stat))
 
 	conn, js, err := eventbus.Connect(cfg.NatsURL)
 	if err != nil {
@@ -72,7 +77,8 @@ func run(logger *slog.Logger) error {
 	}
 	defer conn.Close()
 
-	if _, err := eventbus.EnsureDeadLetterStream(ctx, js); err != nil {
+	deadLetterStream, err := eventbus.EnsureDeadLetterStream(ctx, js)
+	if err != nil {
 		return err
 	}
 	deadLetterPublisher := eventbus.NewDeadLetterPublisher(js)
@@ -98,9 +104,11 @@ func run(logger *slog.Logger) error {
 	} else {
 		logger.Warn("mailer: RESEND_API_KEY не задан, письма отключены")
 	}
-	mail := mailing.NewService(mailSender, mailing.NewPgStore(db), cfg.AppURL, logger)
+	mail := mailing.NewService(mailSender, mailing.NewPgStore(db), cfg.AppURL, cfg.UnsubscribeSecret, logger)
 
-	c := consumer.New(js, db, logger, metrics, cfg.MaxDeliver).WithDeadLetterPublisher(deadLetterPublisher)
+	c := consumer.New(js, db, logger, metrics, cfg.MaxDeliver).
+		WithDeadLetterPublisher(deadLetterPublisher).
+		WithDeadLetterStream(deadLetterStream)
 	c.Handle("family.member.joined", handlers.FamilyMemberJoined(logger, notifier))
 	c.Handle("movie.added", handlers.MovieAdded(logger, notifier, mail))
 	c.Handle("movie.watched", handlers.MovieWatched(logger, notifier))
@@ -120,6 +128,10 @@ func run(logger *slog.Logger) error {
 	c.Handle("security.two_factor_enabled", handlers.TwoFactorEnabled(logger, mail))
 	c.Handle("security.two_factor_disabled", handlers.TwoFactorDisabled(logger, mail))
 	c.Handle("account.deleted", handlers.AccountDeleted(logger, mail))
+	c.Handle("security.backup_code_used", handlers.BackupCodeUsed(logger, mail))
+	c.Handle("security.backup_codes_regenerated", handlers.BackupCodesRegenerated(logger, mail))
+	c.Handle("email.welcome", handlers.Welcome(logger, mail))
+	c.Handle("family.invitation_requested", handlers.FamilyInvitationRequested(logger, mail))
 
 	// Минимальный HTTP-сервер для docker/k8s healthcheck и Prometheus -- у
 	// воркера нет публичного API, но метрики и пробы всё равно нужно

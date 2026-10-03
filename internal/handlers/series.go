@@ -29,7 +29,7 @@ func MovieAdded(logger *slog.Logger, notifier *notifications.Notifier, mail *mai
 
 		logger.Info("обработано событие movie.added", "series_id", p.SeriesID, "family_id", p.FamilyID)
 
-		if err := notifier.NotifyFamily(ctx, p.FamilyID, p.UserID, webpush.Payload{
+		if err := notifier.NotifyFamily(ctx, p.FamilyID, p.UserID, "series_added", webpush.Payload{
 			Title: "Новый сериал в списке",
 			Body:  fmt.Sprintf("Добавлено: «%s»", p.Title),
 		}); err != nil {
@@ -57,7 +57,7 @@ func MovieWatched(logger *slog.Logger, notifier *notifications.Notifier) func(ct
 
 		logger.Info("обработано событие movie.watched", "series_id", p.SeriesID, "family_id", p.FamilyID)
 
-		return notifier.NotifyFamily(ctx, p.FamilyID, p.UserID, webpush.Payload{
+		return notifier.NotifyFamily(ctx, p.FamilyID, p.UserID, "series_watched", webpush.Payload{
 			Title: "Отмечено как просмотренное",
 			Body:  fmt.Sprintf("«%s» теперь в просмотренных", p.Title),
 		})
@@ -81,7 +81,7 @@ func MovieRated(logger *slog.Logger, notifier *notifications.Notifier) func(ctx 
 
 		logger.Info("обработано событие movie.rated", "series_id", p.SeriesID, "family_id", p.FamilyID, "rating", p.Rating)
 
-		return notifier.NotifyFamily(ctx, p.FamilyID, p.UserID, webpush.Payload{
+		return notifier.NotifyFamily(ctx, p.FamilyID, p.UserID, "series_rated", webpush.Payload{
 			Title: "Новая оценка",
 			Body:  fmt.Sprintf("«%s» оценили на %d/5", p.Title, p.Rating),
 		})

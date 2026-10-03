@@ -4,6 +4,8 @@
 package config
 
 import (
+	"errors"
+
 	"github.com/ilyakaznacheev/cleanenv"
 )
 
@@ -47,6 +49,10 @@ type Config struct {
 	MailFrom string `env:"MAIL_FROM" env-default:"notrecinema <noreply@notrecinema.ru>"`
 	// MailReplyTo -- необязательный адрес для ответов на письма.
 	MailReplyTo string `env:"MAIL_REPLY_TO"`
+	// UnsubscribeSecret -- HMAC-ключ ссылок «отписаться» в письмах-
+	// уведомлениях (общий с notrecinema-api). Обязателен, если включена
+	// почта: письмо-рассылка без рабочей отписки отправлять нельзя.
+	UnsubscribeSecret string `env:"UNSUBSCRIBE_SECRET"`
 	// AppURL -- адрес фронтенда без завершающего слэша: на него ведут
 	// ссылки в письмах (/verify-email, /reset-password и т.д.).
 	AppURL string `env:"APP_URL" env-default:"http://localhost:3000"`
@@ -57,5 +63,15 @@ func Load() (Config, error) {
 	if err := cleanenv.ReadEnv(&cfg); err != nil {
 		return Config{}, err
 	}
+	if err := cfg.validate(); err != nil {
+		return Config{}, err
+	}
 	return cfg, nil
+}
+
+func (c Config) validate() error {
+	if c.ResendAPIKey != "" && c.UnsubscribeSecret == "" {
+		return errors.New("config: при заданном RESEND_API_KEY нужен UNSUBSCRIBE_SECRET (тот же, что у notrecinema-api)")
+	}
+	return nil
 }
