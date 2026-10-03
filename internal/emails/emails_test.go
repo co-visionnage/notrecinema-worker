@@ -190,7 +190,7 @@ func TestWritePreviews(t *testing.T) {
 		if err := os.WriteFile(filepath.Join(dir, name+".html"), []byte(out.HTML), 0o644); err != nil {
 			t.Fatalf("write %s: %v", name, err)
 		}
-		index.WriteString(fmt.Sprintf(`<li><a href="%s.html">%s</a> — %s</li>`, name, name, out.Subject))
+		fmt.Fprintf(&index, `<li><a href="%s.html">%s</a> — %s</li>`, name, name, out.Subject)
 	}
 	index.WriteString("</ul>")
 	if err := os.WriteFile(filepath.Join(dir, "index.html"), []byte(index.String()), 0o644); err != nil {
