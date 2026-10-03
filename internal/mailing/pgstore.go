@@ -7,6 +7,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 
+	"notrecinema/worker/internal/emails"
 	"notrecinema/worker/internal/postgres"
 )
 
@@ -78,6 +79,52 @@ func (p *PgStore) FamilyRecipients(ctx context.Context, familyID string, exclude
 		recipients = append(recipients, r)
 	}
 	return recipients, rows.Err()
+}
+
+// WeeklyDigest читает сводку одной функцией БД и раскладывает строки по семьям
+// (функция уже отдаёт их по семьям подряд, по разделам и времени).
+func (p *PgStore) WeeklyDigest(ctx context.Context, userID string, since, until time.Time) ([]emails.DigestFamily, error) {
+	rows, err := p.db.Query(ctx, `
+		SELECT family_id, family_name, section, title, detail, happened_at
+		FROM public.get_weekly_digest_system($1, $2, $3)
+	`, userID, since, until)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var (
+		families []emails.DigestFamily
+		current  = -1
+		lastID   string
+	)
+	for rows.Next() {
+		var (
+			familyID, familyName, section, title, detail string
+			at                                           time.Time
+		)
+		if err := rows.Scan(&familyID, &familyName, &section, &title, &detail, &at); err != nil {
+			return nil, err
+		}
+		if familyID != lastID {
+			families = append(families, emails.DigestFamily{Name: familyName})
+			current++
+			lastID = familyID
+		}
+		item := emails.DigestItem{Title: title, Detail: detail, At: at}
+		family := &families[current]
+		switch section {
+		case "added":
+			family.Added = append(family.Added, item)
+		case "watched":
+			family.Watched = append(family.Watched, item)
+		case "event":
+			family.Events = append(family.Events, item)
+		case "airing":
+			family.Airing = append(family.Airing, item)
+		}
+	}
+	return families, rows.Err()
 }
 
 func (p *PgStore) InvitationInfo(ctx context.Context, invitationID string) (InvitationInfo, error) {

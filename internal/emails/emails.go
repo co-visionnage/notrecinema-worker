@@ -50,6 +50,13 @@ type Highlight struct {
 	Text  string
 }
 
+// Section -- блок письма со списком: заголовок и пункты (например, «Что
+// посмотрели» и названия сериалов).
+type Section struct {
+	Title string
+	Items []string
+}
+
 // Content -- всё содержимое письма.
 type Content struct {
 	Subject    string
@@ -58,6 +65,7 @@ type Content struct {
 	Greeting   string
 	Paragraphs []string
 	Highlight  *Highlight
+	Sections   []Section
 	Button     *Button
 	Footnote   string // мелкий текст под основным (напр. «если это были не вы»)
 	Reason     string // почему человек получил письмо (подвал)

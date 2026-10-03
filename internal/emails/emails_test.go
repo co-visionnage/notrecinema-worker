@@ -7,6 +7,7 @@ import (
 	"sort"
 	"strings"
 	"testing"
+	"time"
 )
 
 func allContents() map[string]Content {
@@ -26,6 +27,7 @@ func allContents() map[string]Content {
 		"backup-regen":    BackupCodesRegenerated("Аня", links.Settings()),
 		"welcome":         Welcome("Аня", links.Home()),
 		"invitation":      FamilyInvitation("Борис", "Семья Ивановых", links.Invite("tok")),
+		"digest":          WeeklyDigest("Аня", []DigestFamily{sampleDigestFamily()}, links.Home()),
 		"no-name-verify":  VerifyEmail("", links.VerifyEmail("tok")),
 		"no-name-deleted": AccountDeleted("   "),
 	}
@@ -280,5 +282,69 @@ func TestLinksForNewPages(t *testing.T) {
 		if got != want {
 			t.Errorf("link = %q, want %q", got, want)
 		}
+	}
+}
+
+func sampleDigestFamily() DigestFamily {
+	at := time.Date(2026, 10, 7, 17, 30, 0, 0, time.UTC) // 20:30 по Москве
+	return DigestFamily{
+		Name:    "Семья Ивановых",
+		Added:   []DigestItem{{Title: "Пингвины <b>Мадагаскара</b>", Detail: "Борис"}},
+		Watched: []DigestItem{{Title: "Во все тяжкие", Detail: "Аня · 5/5"}},
+		Events:  []DigestItem{{Title: "Киновечер", Detail: "Андор", At: at}},
+		Airing:  []DigestItem{{Title: "Андор", Detail: "S2E5", At: time.Date(2026, 10, 9, 0, 0, 0, 0, time.UTC)}},
+	}
+}
+
+func TestWeeklyDigestListsEverythingInBothVersions(t *testing.T) {
+	out, err := Render(WeeklyDigest("Аня", []DigestFamily{sampleDigestFamily()}, "https://notrecinema.ru/"))
+	if err != nil {
+		t.Fatalf("Render() error: %v", err)
+	}
+
+	for _, want := range []string{
+		"Семья Ивановых", "добавил(а) Борис", "Во все тяжкие", "Аня · 5/5",
+		"Киновечер", "7 октября, 20:30", "сериал «Андор»", "серия S2E5", "9 октября",
+	} {
+		if !strings.Contains(out.HTML, want) {
+			t.Errorf("HTML misses %q", want)
+		}
+		if !strings.Contains(out.Text, want) {
+			t.Errorf("text misses %q", want)
+		}
+	}
+	if out.Subject != "Неделя в семье «Семья Ивановых»" {
+		t.Errorf("subject = %q", out.Subject)
+	}
+}
+
+func TestWeeklyDigestEscapesTitles(t *testing.T) {
+	out, err := Render(WeeklyDigest("", []DigestFamily{sampleDigestFamily()}, "https://notrecinema.ru/"))
+	if err != nil {
+		t.Fatalf("Render() error: %v", err)
+	}
+	if strings.Contains(out.HTML, "<b>Мадагаскара</b>") {
+		t.Error("a user-controlled title was rendered as HTML")
+	}
+}
+
+func TestWeeklyDigestSkipsEmptySectionsAndNamesManyFamilies(t *testing.T) {
+	families := []DigestFamily{
+		{Name: "Первая", Added: []DigestItem{{Title: "Шоу", Detail: "Аня"}}},
+		{Name: "Вторая", Watched: []DigestItem{{Title: "Кино", Detail: "Боря"}}},
+	}
+	content := WeeklyDigest("Аня", families, "https://notrecinema.ru/")
+
+	if content.Subject != "Неделя в ваших семьях в notrecinema" {
+		t.Errorf("subject = %q", content.Subject)
+	}
+	if len(content.Sections) != 2 {
+		t.Fatalf("sections = %d, want only the two that have items", len(content.Sections))
+	}
+	if !strings.Contains(content.Preheader, "добавлено — 1") || !strings.Contains(content.Preheader, "просмотрено — 1") {
+		t.Errorf("preheader = %q", content.Preheader)
+	}
+	if (DigestFamily{Name: "Пустая"}).Empty() != true || families[0].Empty() {
+		t.Error("Empty() is wrong")
 	}
 }

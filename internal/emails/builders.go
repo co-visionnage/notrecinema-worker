@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net/url"
 	"strings"
+	"time"
 )
 
 // Ссылки на страницы фронтенда, на которые ведут письма. Страницы
@@ -316,5 +317,134 @@ func FamilyInvitation(inviterName, familyName, acceptURL string) Content {
 		Footnote:  "Если вы не ждали этого письма, просто проигнорируйте его: без вашего согласия никто в семью не добавляется.",
 		Reason:    "Вы получили это письмо, потому что вас пригласили в notrecinema.",
 		Accent:    AccentYellow,
+	}
+}
+
+// DigestItem -- один пункт еженедельной сводки.
+type DigestItem struct {
+	Title  string
+	Detail string
+	At     time.Time
+}
+
+// DigestFamily -- сводка по одной семье. Пустые разделы в письмо не
+// попадают.
+type DigestFamily struct {
+	Name    string
+	Added   []DigestItem
+	Watched []DigestItem
+	Events  []DigestItem
+	Airing  []DigestItem
+}
+
+// Empty -- в семье за неделю ничего не произошло и ничего не запланировано.
+func (f DigestFamily) Empty() bool {
+	return len(f.Added)+len(f.Watched)+len(f.Events)+len(f.Airing) == 0
+}
+
+// digestZone -- время встреч и выхода серий в письме показывается по Москве:
+// сервис русскоязычный, а часового пояса у пользователя в профиле нет.
+var digestZone = time.FixedZone("MSK", 3*60*60)
+
+var monthsGenitive = [...]string{
+	"января", "февраля", "марта", "апреля", "мая", "июня",
+	"июля", "августа", "сентября", "октября", "ноября", "декабря",
+}
+
+func digestDay(at time.Time) string {
+	at = at.In(digestZone)
+	return fmt.Sprintf("%d %s", at.Day(), monthsGenitive[at.Month()-1])
+}
+
+func digestDayTime(at time.Time) string {
+	return fmt.Sprintf("%s, %s", digestDay(at), at.In(digestZone).Format("15:04"))
+}
+
+// WeeklyDigest -- еженедельная сводка по всем семьям человека. families
+// должны быть непустыми (Empty() == false): письмо без новостей не шлём.
+func WeeklyDigest(name string, families []DigestFamily, homeURL string) Content {
+	var sections []Section
+	var added, watched int
+
+	for _, family := range families {
+		label := "«" + family.Name + "»"
+
+		if len(family.Added) > 0 {
+			added += len(family.Added)
+			items := make([]string, 0, len(family.Added))
+			for _, item := range family.Added {
+				text := "«" + item.Title + "»"
+				if item.Detail != "" {
+					text += " — добавил(а) " + item.Detail
+				}
+				items = append(items, text)
+			}
+			sections = append(sections, Section{Title: label + ": добавили в список", Items: items})
+		}
+		if len(family.Watched) > 0 {
+			watched += len(family.Watched)
+			items := make([]string, 0, len(family.Watched))
+			for _, item := range family.Watched {
+				text := "«" + item.Title + "»"
+				if item.Detail != "" {
+					text += " — " + item.Detail
+				}
+				items = append(items, text)
+			}
+			sections = append(sections, Section{Title: label + ": посмотрели", Items: items})
+		}
+		if len(family.Events) > 0 {
+			items := make([]string, 0, len(family.Events))
+			for _, item := range family.Events {
+				text := "«" + item.Title + "» — " + digestDayTime(item.At)
+				if item.Detail != "" {
+					text += " (сериал «" + item.Detail + "»)"
+				}
+				items = append(items, text)
+			}
+			sections = append(sections, Section{Title: label + ": встречи на этой неделе", Items: items})
+		}
+		if len(family.Airing) > 0 {
+			items := make([]string, 0, len(family.Airing))
+			for _, item := range family.Airing {
+				text := "«" + item.Title + "» — " + digestDay(item.At)
+				if item.Detail != "" {
+					text += ", серия " + item.Detail
+				}
+				items = append(items, text)
+			}
+			sections = append(sections, Section{Title: label + ": скоро новые серии", Items: items})
+		}
+	}
+
+	subject := "Неделя в ваших семьях в notrecinema"
+	if len(families) == 1 {
+		subject = "Неделя в семье «" + families[0].Name + "»"
+	}
+
+	var summary []string
+	if added > 0 {
+		summary = append(summary, fmt.Sprintf("добавлено — %d", added))
+	}
+	if watched > 0 {
+		summary = append(summary, fmt.Sprintf("просмотрено — %d", watched))
+	}
+	preheader := "Что нового в ваших списках и что ждёт впереди"
+	paragraph := "Вот что происходило в ваших семьях за последние семь дней и что запланировано на ближайшую неделю."
+	if len(summary) > 0 {
+		preheader = "За неделю: " + strings.Join(summary, ", ")
+		paragraph += " " + preheader + "."
+	}
+
+	return Content{
+		Subject:    subject,
+		Preheader:  preheader,
+		Heading:    "Неделя в семье",
+		Greeting:   greeting(name),
+		Paragraphs: []string{paragraph},
+		Sections:   sections,
+		Button:     &Button{Label: "Открыть notrecinema", URL: homeURL},
+		Reason:     "Вы получили эту сводку, потому что состоите в семье в notrecinema.",
+		Accent:     AccentLime,
 	}
 }

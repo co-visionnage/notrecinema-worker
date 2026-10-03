@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"time"
 
 	"notrecinema/worker/internal/mailing"
 )
@@ -112,6 +113,29 @@ func BackupCodeUsed(logger *slog.Logger, mail *mailing.Service) func(ctx context
 
 		logger.Info("обработано событие security.backup_code_used", "user_id", p.UserID, "remaining", p.Remaining)
 		return mail.SendBackupCodeUsed(ctx, p.UserID, p.Remaining)
+	}
+}
+
+type weeklyDigestPayload struct {
+	UserID string    `json:"userId"`
+	Since  time.Time `json:"since"`
+	Until  time.Time `json:"until"`
+}
+
+// WeeklyDigest -- еженедельная сводка семей. Содержимое собирается здесь, в
+// момент отправки: в событии только человек и границы недели.
+func WeeklyDigest(logger *slog.Logger, mail *mailing.Service) func(ctx context.Context, payload json.RawMessage) error {
+	return func(ctx context.Context, payload json.RawMessage) error {
+		var p weeklyDigestPayload
+		if err := json.Unmarshal(payload, &p); err != nil {
+			return fmt.Errorf("email.weekly_digest: разбор payload: %w", err)
+		}
+		if p.UserID == "" || p.Since.IsZero() || p.Until.IsZero() {
+			return fmt.Errorf("email.weekly_digest: в payload нет userId или границ недели")
+		}
+
+		logger.Info("обработано событие email.weekly_digest", "user_id", p.UserID)
+		return mail.SendWeeklyDigest(ctx, p.UserID, p.Since, p.Until)
 	}
 }
 
