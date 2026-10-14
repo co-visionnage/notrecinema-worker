@@ -301,6 +301,11 @@ func TestUserEmailEnabledFollowsPreferencesAndDefaults(t *testing.T) {
 		t.Fatalf("default for progress_reminder = (%v, %v), want on", on, err)
 	}
 
+	on, err = store.UserEmailEnabled(ctx, userID, "event_reminder")
+	if err != nil || !on {
+		t.Fatalf("default for event_reminder = (%v, %v), want on", on, err)
+	}
+
 	setEmailPreference(t, conn, userID, "progress_reminder", false)
 	on, err = store.UserEmailEnabled(ctx, userID, "progress_reminder")
 	if err != nil || on {

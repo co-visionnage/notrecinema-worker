@@ -116,6 +116,7 @@ func run(logger *slog.Logger) error {
 	c.Handle("poll.created", handlers.PollCreated(logger, notifier))
 	c.Handle("poll.closed", handlers.PollClosed(logger, notifier))
 	c.Handle("watch_event.created", handlers.WatchEventCreated(logger, notifier))
+	c.Handle("watch_event.reminder", handlers.WatchEventReminder(logger, notifier, mail))
 	c.Handle("progress.stale", handlers.ProgressStale(logger, notifier, mail))
 	c.Handle("season.updated", handlers.SeasonUpdated(logger, notifier, mail))
 	c.Handle("series.bulk_added", handlers.SeriesBulkAdded(logger, notifier))

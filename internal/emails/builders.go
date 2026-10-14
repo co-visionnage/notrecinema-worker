@@ -243,6 +243,24 @@ func ProgressStale(name, title string, season, episode int, seriesURL string) Co
 	}
 }
 
+// EventReminder -- напоминание о встрече для просмотра, которая скоро начнётся.
+func EventReminder(name, title string, scheduledAt time.Time, homeURL string) Content {
+	when := digestDayTime(scheduledAt)
+	return Content{
+		Subject:   "Скоро начнём: «" + title + "»",
+		Preheader: "Встреча для просмотра начнётся " + when,
+		Heading:   "Скоро встреча!",
+		Greeting:  greeting(name),
+		Paragraphs: []string{
+			"Совсем скоро ваша семья собирается смотреть вместе. Если планы изменились, не забудьте поменять свой ответ.",
+		},
+		Highlight: &Highlight{Label: "Начало", Title: title, Text: when + " (МСК)"},
+		Button:    &Button{Label: "Открыть notrecinema", URL: homeURL},
+		Reason:    "Вы получили это письмо, потому что состоите в семье, где запланирована встреча.",
+		Accent:    AccentYellow,
+	}
+}
+
 // BackupCodeUsed -- уведомление: вход выполнен резервным кодом. Если кодов
 // почти не осталось, письмо прямо просит выпустить новые.
 func BackupCodeUsed(name string, remaining int, settingsURL string) Content {

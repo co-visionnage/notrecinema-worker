@@ -120,6 +120,7 @@ SMTP не нужны). Без `RESEND_API_KEY` письма отключены: 
 | `movie.added` | Новый сериал в семье | best-effort (push уже ушёл) |
 | `season.updated` | Вышел новый сезон | best-effort |
 | `progress.stale` | Напоминание о заброшенном сериале | best-effort |
+| `watch_event.reminder` | Напоминание участнику о встрече за час (push и письмо) | best-effort |
 
 Что важно:
 
