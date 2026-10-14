@@ -21,7 +21,7 @@ import (
 	texttemplate "text/template"
 )
 
-// Accent -- цветовой акцент письма (кнопка, плашка, полоска над заголовком).
+// Accent -- цветовой акцент письма (кнопка и плашка).
 type Accent string
 
 const (
