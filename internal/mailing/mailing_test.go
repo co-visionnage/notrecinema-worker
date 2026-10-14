@@ -399,6 +399,7 @@ func TestDisabledServiceDoesNothingAndNeverFails(t *testing.T) {
 		svc.NotifyFamilySeriesAdded(ctx, "f", nil, "s", "t")
 		svc.NotifyFamilySeasonUpdated(ctx, "f", nil, "t", 2)
 		svc.NotifyUserProgressStale(ctx, "u", "s", "t", 1, 1)
+		svc.NotifyUserEventReminder(ctx, "u", "t", time.Now())
 	}
 	if len(store.tokens) != 0 {
 		t.Error("a disabled service must not create tokens")
@@ -470,6 +471,39 @@ func TestProgressReminderHonoursTheEmailSwitch(t *testing.T) {
 	}
 	token := unsubscribe.Sign([]byte(testSecret), "v", "progress_reminder")
 	if !strings.Contains(sender.sent[0].Text, token) {
+		t.Error("the reminder has no unsubscribe link for its category")
+	}
+}
+
+func TestEventReminderGoesToVerifiedUserWhoHasNotSwitchedItOff(t *testing.T) {
+	sender := &fakeSender{enabled: true}
+	store := &fakeStore{
+		users: map[string]UserInfo{
+			"v": {Email: "v@example.com", DisplayName: "Вера", Verified: true},
+			"u": {Email: "u@example.com", Verified: false},
+			"o": {Email: "o@example.com", Verified: true},
+		},
+		emailOff: map[string]bool{"o": true},
+	}
+	svc := newTestService(sender, store)
+	at := time.Date(2026, 10, 20, 17, 0, 0, 0, time.UTC)
+
+	svc.NotifyUserEventReminder(context.Background(), "u", "Вечер кино", at)
+	svc.NotifyUserEventReminder(context.Background(), "o", "Вечер кино", at)
+	if len(sender.sent) != 0 {
+		t.Fatalf("sent = %d, want 0 (unverified address / email switched off)", len(sender.sent))
+	}
+
+	svc.NotifyUserEventReminder(context.Background(), "v", "Вечер кино", at)
+	if len(sender.sent) != 1 {
+		t.Fatalf("sent = %d, want 1", len(sender.sent))
+	}
+	msg := sender.sent[0]
+	if !strings.Contains(msg.Text, "Вечер кино") || !strings.Contains(msg.Text, "20 октября, 20:00") {
+		t.Errorf("the letter must name the event and show Moscow time: %s", msg.Text)
+	}
+	token := unsubscribe.Sign([]byte(testSecret), "v", "event_reminder")
+	if !strings.Contains(msg.Text, token) {
 		t.Error("the reminder has no unsubscribe link for its category")
 	}
 }

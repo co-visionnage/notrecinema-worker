@@ -44,6 +44,7 @@ const (
 	categorySeasonUpdate     = "season_update"
 	categoryProgressReminder = "progress_reminder"
 	categoryWeeklyDigest     = "weekly_digest"
+	categoryEventReminder    = "event_reminder"
 )
 
 // ErrUserNotFound -- пользователя уже нет (например, удалил аккаунт, пока
@@ -402,6 +403,33 @@ func (s *Service) NotifyUserProgressStale(ctx context.Context, userID, seriesID,
 	}
 	if err := s.deliverNotification(ctx, userID, categoryProgressReminder, info.Email, emails.ProgressStale(info.DisplayName, title, season, episode, s.links.Series(seriesID))); err != nil {
 		s.logger.Error("mailing: не удалось отправить напоминание", "event", "progress.stale", "user_id", userID, "error", err)
+	}
+}
+
+// NotifyUserEventReminder напоминает одному человеку о скорой встрече.
+func (s *Service) NotifyUserEventReminder(ctx context.Context, userID, title string, scheduledAt time.Time) {
+	if !s.Enabled() {
+		return
+	}
+	info, ok, err := s.lookup(ctx, categoryEventReminder, userID, true)
+	if err != nil {
+		s.logger.Error("mailing: не удалось получить адресата", "event", "watch_event.reminder", "user_id", userID, "error", err)
+		return
+	}
+	if !ok {
+		return
+	}
+	enabled, err := s.store.UserEmailEnabled(ctx, userID, categoryEventReminder)
+	if err != nil {
+		s.logger.Error("mailing: не удалось прочитать настройки уведомлений", "event", "watch_event.reminder", "user_id", userID, "error", err)
+		return
+	}
+	if !enabled {
+		telemetry.RecordMailSkipped(categoryEventReminder, "opted_out")
+		return
+	}
+	if err := s.deliverNotification(ctx, userID, categoryEventReminder, info.Email, emails.EventReminder(info.DisplayName, title, scheduledAt, s.links.Home())); err != nil {
+		s.logger.Error("mailing: не удалось отправить напоминание о встрече", "event", "watch_event.reminder", "user_id", userID, "error", err)
 	}
 }
 

@@ -22,6 +22,7 @@ func allContents() map[string]Content {
 		"series":          SeriesAdded("Аня", "Во все тяжкие", links.Series("abc")),
 		"season":          SeasonUpdated("Аня", "Во все тяжкие", 5, links.Home()),
 		"stale":           ProgressStale("Аня", "Во все тяжкие", 2, 7, links.Series("abc")),
+		"event_reminder":  EventReminder("Аня", "Вечер кино", time.Date(2026, 10, 20, 17, 0, 0, 0, time.UTC), links.Home()),
 		"backup-used":     BackupCodeUsed("Аня", 7, links.Settings()),
 		"backup-low":      BackupCodeUsed("Аня", 1, links.Settings()),
 		"backup-regen":    BackupCodesRegenerated("Аня", links.Settings()),
